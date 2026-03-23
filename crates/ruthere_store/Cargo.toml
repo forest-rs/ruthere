@@ -1,0 +1,17 @@
+[package]
+name = "ruthere_store"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "In-memory runtime store for ruthere presence facts"
+keywords = ["presence", "realtime", "state"]
+categories = ["data-structures", "no-std"]
+
+[dependencies]
+hashbrown.workspace = true
+ruthere_core.workspace = true
+
+[lints]
+workspace = true

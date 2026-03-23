@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/ruthere_core",
+    "crates/ruthere_store",
 ]
 
 [workspace.package]
@@ -66,5 +67,6 @@ clippy.allow_attributes = "warn"
 
 [workspace.dependencies]
 ruthere_core = { path = "crates/ruthere_core" }
+ruthere_store = { path = "crates/ruthere_store" }
 
 hashbrown = { default-features = false, features = ["default-hasher"], version = "0.16.1" }
