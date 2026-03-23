@@ -13,5 +13,8 @@ resource detail.
 It now also retains a local change log so callers can consume incremental
 changes with store-assigned cursors.
 
+Filtered read APIs let callers apply their own visibility policy to snapshots
+and subject summaries without moving that policy into `ruthere_core`.
+
 The crate does not yet define subscriptions, watcher policy evaluation, or
 transport integration.

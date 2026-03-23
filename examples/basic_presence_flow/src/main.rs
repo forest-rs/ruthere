@@ -132,12 +132,57 @@ fn main() {
         print_snapshot(&ui, snapshot);
     }
 
+    let member_view = |visibility: &Visibility<&'static str>| {
+        matches!(
+            visibility,
+            Visibility::Public | Visibility::Restricted("doc-members")
+        )
+    };
+    let public_only =
+        |visibility: &Visibility<&'static str>| matches!(visibility, Visibility::Public);
+
+    ui.section("🔐", "Visibility-Filtered Resource Views Before Expiry");
+    ui.detail("viewer", "doc-members");
+    let mut member_snapshots = store.snapshots_in_context_visible(&doc, &member_view);
+    member_snapshots.sort_by(snapshot_sort_key);
+    print_snapshots_or_empty(
+        &ui,
+        &member_snapshots,
+        "no snapshots visible to doc members",
+    );
+    ui.detail("viewer", "public-only");
+    let mut public_snapshots = store.snapshots_in_context_visible(&doc, &public_only);
+    public_snapshots.sort_by(snapshot_sort_key);
+    print_snapshots_or_empty(
+        &ui,
+        &public_snapshots,
+        "no snapshots visible to public-only viewers",
+    );
+
     ui.section("👤", "Projected Subject Summaries Before Expiry");
     let mut summaries = store.subject_summaries_in_context(&doc);
     summaries.sort_by(summary_sort_key);
     for summary in &summaries {
         print_summary(&ui, summary);
     }
+
+    ui.section("🔐", "Visibility-Filtered Subject Summaries Before Expiry");
+    ui.detail("viewer", "doc-members");
+    let mut member_summaries = store.subject_summaries_in_context_visible(&doc, &member_view);
+    member_summaries.sort_by(summary_sort_key);
+    print_summaries_or_empty(
+        &ui,
+        &member_summaries,
+        "no subject summaries visible to doc members",
+    );
+    ui.detail("viewer", "public-only");
+    let mut public_summaries = store.subject_summaries_in_context_visible(&doc, &public_only);
+    public_summaries.sort_by(summary_sort_key);
+    print_summaries_or_empty(
+        &ui,
+        &public_summaries,
+        "no subject summaries visible to public-only viewers",
+    );
 
     let removed = store.expire(Timestamp::new(125));
     ui.section("⏳", "Expiry Applied At t=125");
@@ -203,6 +248,17 @@ fn print_snapshot(ui: &Ui, snapshot: &Snapshot) {
     ui.detail("expiry", &expires);
 }
 
+fn print_snapshots_or_empty(ui: &Ui, snapshots: &[Snapshot], empty: &str) {
+    if snapshots.is_empty() {
+        ui.empty(empty);
+        return;
+    }
+
+    for snapshot in snapshots {
+        print_snapshot(ui, snapshot);
+    }
+}
+
 fn print_summary(ui: &Ui, summary: &Summary) {
     let subject = summary.subject.0;
     let context = summary.context.0;
@@ -228,6 +284,17 @@ fn print_summary(ui: &Ui, summary: &Summary) {
     ui.detail("last seen", &last_seen);
     ui.detail("observed at", &observed_at.to_string());
     ui.detail("resource count", &resource_count.to_string());
+}
+
+fn print_summaries_or_empty(ui: &Ui, summaries: &[Summary], empty: &str) {
+    if summaries.is_empty() {
+        ui.empty(empty);
+        return;
+    }
+
+    for summary in summaries {
+        print_summary(ui, summary);
+    }
 }
 
 fn print_change(
@@ -322,6 +389,13 @@ impl Ui {
         println!(
             "  {}",
             self.paint(&format!("• {title}"), COLOR_WHITE, StyleFlags::BOLD)
+        );
+    }
+
+    fn empty(&self, value: &str) {
+        println!(
+            "  {}",
+            self.paint(&format!("(none) {value}"), COLOR_WHITE, StyleFlags::NONE)
         );
     }
 

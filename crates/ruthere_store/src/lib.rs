@@ -15,6 +15,7 @@ use alloc::vec::Vec;
 use hashbrown::{HashMap, hash_map::Entry};
 mod change;
 mod projection;
+mod visibility;
 
 pub use change::{StoreChange, StoreChangeKind};
 pub use projection::{
@@ -25,6 +26,7 @@ use ruthere_core::{
     Expiry, ExtensionFacet, FacetChange, Never, PresenceAddress, PresenceFacet, PresenceFacetKind,
     PresenceKey, PresenceSnapshot, PresenceUpdate, Timestamp, Visibility,
 };
+pub use visibility::VisibilityPolicy;
 
 /// A fully qualified key for one stored presence entry.
 ///
@@ -219,6 +221,26 @@ where
             .map(|state| self.materialize_snapshot(key, state))
     }
 
+    /// Returns a materialized snapshot for one stored entry when the supplied
+    /// visibility policy allows it.
+    #[must_use]
+    pub fn snapshot_visible<P>(
+        &self,
+        key: &PresenceEntryKey<S, C, R, I>,
+        visibility: &P,
+    ) -> Option<PresenceSnapshot<S, C, R, I, V, E>>
+    where
+        P: VisibilityPolicy<V>,
+    {
+        self.entries.get(key).and_then(|state| {
+            if visibility.allows(&state.visibility) {
+                Some(self.materialize_snapshot(key, state))
+            } else {
+                None
+            }
+        })
+    }
+
     /// Returns all stored snapshots for an addressed scope across origins.
     ///
     /// Snapshot order is unspecified.
@@ -239,6 +261,31 @@ where
             .collect()
     }
 
+    /// Returns all visible stored snapshots for an addressed scope across
+    /// origins.
+    ///
+    /// Snapshot order is unspecified.
+    #[must_use]
+    pub fn snapshots_for_address_visible<P>(
+        &self,
+        address: &PresenceAddress<S, C, R>,
+        visibility: &P,
+    ) -> Vec<PresenceSnapshot<S, C, R, I, V, E>>
+    where
+        P: VisibilityPolicy<V>,
+    {
+        self.entries
+            .iter()
+            .filter_map(|(key, state)| {
+                if &key.address == address && visibility.allows(&state.visibility) {
+                    Some(self.materialize_snapshot(key, state))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
     /// Returns all stored snapshots for a context across addresses and origins.
     ///
     /// Snapshot order is unspecified.
@@ -248,6 +295,31 @@ where
             .iter()
             .filter_map(|(key, state)| {
                 if &key.address.context == context {
+                    Some(self.materialize_snapshot(key, state))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Returns all visible stored snapshots for a context across addresses and
+    /// origins.
+    ///
+    /// Snapshot order is unspecified.
+    #[must_use]
+    pub fn snapshots_in_context_visible<P>(
+        &self,
+        context: &C,
+        visibility: &P,
+    ) -> Vec<PresenceSnapshot<S, C, R, I, V, E>>
+    where
+        P: VisibilityPolicy<V>,
+    {
+        self.entries
+            .iter()
+            .filter_map(|(key, state)| {
+                if &key.address.context == context && visibility.allows(&state.visibility) {
                     Some(self.materialize_snapshot(key, state))
                 } else {
                     None
@@ -295,6 +367,52 @@ where
             .map(|group| summarize_subject(group, policy))
     }
 
+    /// Returns a visible projected summary for one subject in a context using
+    /// the default subject projection policy.
+    #[must_use]
+    pub fn subject_summary_in_context_visible<P>(
+        &self,
+        subject: &S,
+        context: &C,
+        visibility: &P,
+    ) -> Option<SubjectPresenceSummary<S, C, R, I, V, E>>
+    where
+        P: VisibilityPolicy<V>,
+    {
+        self.subject_summary_in_context_visible_with_policy(
+            subject,
+            context,
+            visibility,
+            &DefaultSubjectProjectionPolicy,
+        )
+    }
+
+    /// Returns a visible projected summary for one subject in a context using
+    /// the provided projection and visibility policies.
+    #[must_use]
+    pub fn subject_summary_in_context_visible_with_policy<VP, PP>(
+        &self,
+        subject: &S,
+        context: &C,
+        visibility: &VP,
+        policy: &PP,
+    ) -> Option<SubjectPresenceSummary<S, C, R, I, V, E>>
+    where
+        VP: VisibilityPolicy<V>,
+        PP: SubjectProjectionPolicy,
+    {
+        let snapshots = self
+            .snapshots_in_context_visible(context, visibility)
+            .into_iter()
+            .filter(|snapshot| &snapshot.address.subject == subject)
+            .collect::<Vec<_>>();
+
+        group_snapshots_by_subject(snapshots)
+            .into_iter()
+            .next()
+            .map(|group| summarize_subject(group, policy))
+    }
+
     /// Returns projected subject summaries for all subjects in a context using
     /// the default subject projection policy.
     #[must_use]
@@ -317,6 +435,43 @@ where
         P: SubjectProjectionPolicy,
     {
         group_snapshots_by_subject(self.snapshots_in_context(context))
+            .into_iter()
+            .map(|group| summarize_subject(group, policy))
+            .collect()
+    }
+
+    /// Returns visible projected subject summaries for all subjects in a
+    /// context using the default subject projection policy.
+    #[must_use]
+    pub fn subject_summaries_in_context_visible<P>(
+        &self,
+        context: &C,
+        visibility: &P,
+    ) -> Vec<SubjectPresenceSummary<S, C, R, I, V, E>>
+    where
+        P: VisibilityPolicy<V>,
+    {
+        self.subject_summaries_in_context_visible_with_policy(
+            context,
+            visibility,
+            &DefaultSubjectProjectionPolicy,
+        )
+    }
+
+    /// Returns visible projected subject summaries for all subjects in a
+    /// context using the provided projection and visibility policies.
+    #[must_use]
+    pub fn subject_summaries_in_context_visible_with_policy<VP, PP>(
+        &self,
+        context: &C,
+        visibility: &VP,
+        policy: &PP,
+    ) -> Vec<SubjectPresenceSummary<S, C, R, I, V, E>>
+    where
+        VP: VisibilityPolicy<V>,
+        PP: SubjectProjectionPolicy,
+    {
+        group_snapshots_by_subject(self.snapshots_in_context_visible(context, visibility))
             .into_iter()
             .map(|group| summarize_subject(group, policy))
             .collect()
@@ -711,5 +866,92 @@ mod tests {
             StoreChangeKind::Expired(PresenceEntryKey { address, origin })
                 if *address == expired_key && *origin == 100_u64
         ));
+    }
+
+    #[test]
+    fn snapshot_visible_filters_hidden_entries() {
+        let mut store = InMemoryStore::<u64, u64, u64, u64, &'static str>::new();
+        let hidden =
+            PresenceEntryKey::new(PresenceAddress::new(1_u64, 9_u64, Some(10_u64)), 100_u64);
+        let visible =
+            PresenceEntryKey::new(PresenceAddress::new(2_u64, 9_u64, Some(11_u64)), 101_u64);
+        let public_only =
+            |visibility: &Visibility<&'static str>| matches!(visibility, Visibility::Public);
+
+        store.publish(
+            PresenceUpdate::new(
+                hidden.address.clone(),
+                hidden.origin,
+                Visibility::Restricted("members"),
+                Timestamp::new(1),
+                Expiry::Never,
+            )
+            .set_activity(Activity::Editing),
+        );
+        store.publish(
+            PresenceUpdate::new(
+                visible.address.clone(),
+                visible.origin,
+                Visibility::Public,
+                Timestamp::new(2),
+                Expiry::Never,
+            )
+            .set_availability(Availability::Available),
+        );
+
+        assert!(store.snapshot_visible(&hidden, &public_only).is_none());
+        assert!(store.snapshot_visible(&visible, &public_only).is_some());
+        assert_eq!(
+            store
+                .snapshots_in_context_visible(&9_u64, &public_only)
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn subject_summaries_visible_omit_hidden_subjects() {
+        let mut store = InMemoryStore::<u64, u64, u64, u64, &'static str>::new();
+        let public_only =
+            |visibility: &Visibility<&'static str>| matches!(visibility, Visibility::Public);
+        let member_view = |visibility: &Visibility<&'static str>| {
+            matches!(
+                visibility,
+                Visibility::Public | Visibility::Restricted("members")
+            )
+        };
+
+        store.publish(
+            PresenceUpdate::new(
+                PresenceAddress::new(1_u64, 5_u64, Some(10_u64)),
+                100_u64,
+                Visibility::Restricted("members"),
+                Timestamp::new(1),
+                Expiry::Never,
+            )
+            .set_activity(Activity::Editing),
+        );
+        store.publish(
+            PresenceUpdate::new(
+                PresenceAddress::new(2_u64, 5_u64, Some(11_u64)),
+                101_u64,
+                Visibility::Public,
+                Timestamp::new(2),
+                Expiry::Never,
+            )
+            .set_activity(Activity::Observing),
+        );
+
+        let public_summaries = store.subject_summaries_in_context_visible(&5_u64, &public_only);
+        let member_summaries = store.subject_summaries_in_context_visible(&5_u64, &member_view);
+
+        assert_eq!(public_summaries.len(), 1);
+        assert_eq!(public_summaries[0].subject, 2_u64);
+        assert_eq!(member_summaries.len(), 2);
+        assert!(
+            store
+                .subject_summary_in_context_visible(&1_u64, &5_u64, &public_only)
+                .is_none()
+        );
     }
 }
