@@ -15,6 +15,7 @@ changes with store-assigned cursors.
 
 Filtered read APIs let callers apply their own visibility policy to snapshots
 and subject summaries without moving that policy into `ruthere_core`.
+Filtered cursor APIs now apply that same visibility policy to retained changes.
 
 The crate does not yet define subscriptions, watcher policy evaluation, or
 transport integration.

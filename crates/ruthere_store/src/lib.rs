@@ -17,7 +17,7 @@ mod change;
 mod projection;
 mod visibility;
 
-pub use change::{StoreChange, StoreChangeKind};
+pub use change::{StoreChange, StoreChangeKind, StoreExpired};
 pub use projection::{
     DefaultSubjectProjectionPolicy, SubjectPresenceSummary, SubjectProjectionPolicy,
 };
@@ -170,6 +170,38 @@ where
         self.changes
             .iter()
             .filter(|change| change.sequence > since)
+            .cloned()
+            .collect()
+    }
+
+    /// Returns `true` when the store has retained visible changes with a
+    /// sequence greater than `sequence`.
+    #[must_use]
+    pub fn has_visible_changes_since<P>(&self, sequence: u64, visibility: &P) -> bool
+    where
+        P: VisibilityPolicy<V>,
+    {
+        self.changes
+            .iter()
+            .any(|change| change.sequence > sequence && change_is_visible(change, visibility))
+    }
+
+    /// Returns all retained store changes with `sequence > since` that satisfy
+    /// the supplied visibility policy.
+    ///
+    /// Change order matches store sequence order.
+    #[must_use]
+    pub fn changes_since_visible<P>(
+        &self,
+        since: u64,
+        visibility: &P,
+    ) -> Vec<StoreChange<S, C, R, I, V, E>>
+    where
+        P: VisibilityPolicy<V>,
+    {
+        self.changes
+            .iter()
+            .filter(|change| change.sequence > since && change_is_visible(change, visibility))
             .cloned()
             .collect()
     }
@@ -492,11 +524,17 @@ where
             .collect::<Vec<_>>();
 
         for key in &expired_keys {
-            self.entries.remove(key);
+            let removed = self
+                .entries
+                .remove(key)
+                .expect("expired entry should still exist during removal");
             self.next_sequence = self.next_sequence.saturating_add(1);
             self.changes.push(StoreChange {
                 sequence: self.next_sequence,
-                kind: StoreChangeKind::Expired(key.clone()),
+                kind: StoreChangeKind::Expired(StoreExpired {
+                    key: key.clone(),
+                    visibility: removed.visibility,
+                }),
             });
         }
 
@@ -519,11 +557,25 @@ where
     }
 }
 
+fn change_is_visible<S, C, R, I, V, E, P>(
+    change: &StoreChange<S, C, R, I, V, E>,
+    visibility: &P,
+) -> bool
+where
+    E: ExtensionFacet,
+    P: VisibilityPolicy<V>,
+{
+    match &change.kind {
+        StoreChangeKind::Published(update) => visibility.allows(&update.visibility),
+        StoreChangeKind::Expired(expired) => visibility.allows(&expired.visibility),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::vec::Vec;
 
-    use super::{InMemoryStore, PresenceEntryKey, StoreChangeKind};
+    use super::{InMemoryStore, PresenceEntryKey, StoreChangeKind, StoreExpired};
     use ruthere_core::{
         Activity, Availability, Expiry, ExtensionFacet, PresenceAddress, PresenceFacet,
         PresenceUpdate, Timestamp, Visibility,
@@ -863,8 +915,10 @@ mod tests {
         assert_eq!(changes[0].sequence, 3);
         assert!(matches!(
             &changes[0].kind,
-            StoreChangeKind::Expired(PresenceEntryKey { address, origin })
-                if *address == expired_key && *origin == 100_u64
+            StoreChangeKind::Expired(StoreExpired {
+                key: PresenceEntryKey { address, origin },
+                visibility: Visibility::Public,
+            }) if *address == expired_key && *origin == 100_u64
         ));
     }
 
@@ -953,5 +1007,65 @@ mod tests {
                 .subject_summary_in_context_visible(&1_u64, &5_u64, &public_only)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn changes_since_visible_filters_published_and_expired_changes() {
+        let mut store = InMemoryStore::<u64, u64, u64, u64, &'static str>::new();
+        let public_only =
+            |visibility: &Visibility<&'static str>| matches!(visibility, Visibility::Public);
+        let member_view = |visibility: &Visibility<&'static str>| {
+            matches!(
+                visibility,
+                Visibility::Public | Visibility::Restricted("members")
+            )
+        };
+
+        store.publish(
+            PresenceUpdate::new(
+                PresenceAddress::new(1_u64, 9_u64, Some(10_u64)),
+                100_u64,
+                Visibility::Restricted("members"),
+                Timestamp::new(1),
+                Expiry::At(Timestamp::new(5)),
+            )
+            .set_activity(Activity::Editing),
+        );
+        store.publish(
+            PresenceUpdate::new(
+                PresenceAddress::new(2_u64, 9_u64, Some(11_u64)),
+                101_u64,
+                Visibility::Public,
+                Timestamp::new(2),
+                Expiry::Never,
+            )
+            .set_activity(Activity::Observing),
+        );
+
+        let member_changes = store.changes_since_visible(0, &member_view);
+        let public_changes = store.changes_since_visible(0, &public_only);
+
+        assert_eq!(member_changes.len(), 2);
+        assert_eq!(public_changes.len(), 1);
+        assert_eq!(public_changes[0].sequence, 2);
+        assert!(store.has_visible_changes_since(0, &member_view));
+        assert!(store.has_visible_changes_since(0, &public_only));
+
+        let removed = store.expire(Timestamp::new(5));
+        let member_expiry = store.changes_since_visible(2, &member_view);
+        let public_expiry = store.changes_since_visible(2, &public_only);
+
+        assert_eq!(removed, 1);
+        assert_eq!(member_expiry.len(), 1);
+        assert_eq!(public_expiry.len(), 0);
+        assert!(matches!(
+            &member_expiry[0].kind,
+            StoreChangeKind::Expired(StoreExpired {
+                visibility: Visibility::Restricted("members"),
+                ..
+            })
+        ));
+        assert!(store.has_visible_changes_since(2, &member_view));
+        assert!(!store.has_visible_changes_since(2, &public_only));
     }
 }

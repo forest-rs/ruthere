@@ -117,6 +117,31 @@ fn main() {
         print_change(&ui, &change);
     }
 
+    let member_view = |visibility: &Visibility<&'static str>| {
+        matches!(
+            visibility,
+            Visibility::Public | Visibility::Restricted("doc-members")
+        )
+    };
+    let public_only =
+        |visibility: &Visibility<&'static str>| matches!(visibility, Visibility::Public);
+
+    ui.section("🔐", "Visibility-Filtered Changes Since #0");
+    ui.detail("viewer", "doc-members");
+    let member_changes = store.changes_since_visible(0, &member_view);
+    print_changes_or_empty(
+        &ui,
+        &member_changes,
+        "no retained changes visible to doc members",
+    );
+    ui.detail("viewer", "public-only");
+    let public_changes = store.changes_since_visible(0, &public_only);
+    print_changes_or_empty(
+        &ui,
+        &public_changes,
+        "no retained changes visible to public-only viewers",
+    );
+
     let browser_key = PresenceEntryKey::new(alice_browser.clone(), browser_origin.clone());
     let browser_snapshot = store
         .snapshot(&browser_key)
@@ -131,15 +156,6 @@ fn main() {
     for snapshot in &snapshots {
         print_snapshot(&ui, snapshot);
     }
-
-    let member_view = |visibility: &Visibility<&'static str>| {
-        matches!(
-            visibility,
-            Visibility::Public | Visibility::Restricted("doc-members")
-        )
-    };
-    let public_only =
-        |visibility: &Visibility<&'static str>| matches!(visibility, Visibility::Public);
 
     ui.section("🔐", "Visibility-Filtered Resource Views Before Expiry");
     ui.detail("viewer", "doc-members");
@@ -192,6 +208,22 @@ fn main() {
     for change in store.changes_since(3) {
         print_change(&ui, &change);
     }
+
+    ui.section("🔐", "Visibility-Filtered Changes Since #3");
+    ui.detail("viewer", "doc-members");
+    let member_changes = store.changes_since_visible(3, &member_view);
+    print_changes_or_empty(
+        &ui,
+        &member_changes,
+        "no retained changes visible to doc members",
+    );
+    ui.detail("viewer", "public-only");
+    let public_changes = store.changes_since_visible(3, &public_only);
+    print_changes_or_empty(
+        &ui,
+        &public_changes,
+        "no retained changes visible to public-only viewers",
+    );
 
     ui.section("🗂️", "Raw Resource Snapshots After Expiry");
     let mut snapshots = store.snapshots_in_context(&doc);
@@ -297,6 +329,21 @@ fn print_summaries_or_empty(ui: &Ui, summaries: &[Summary], empty: &str) {
     }
 }
 
+fn print_changes_or_empty(
+    ui: &Ui,
+    changes: &[StoreChange<SubjectId, ContextId, ResourceId, OriginId, &'static str>],
+    empty: &str,
+) {
+    if changes.is_empty() {
+        ui.empty(empty);
+        return;
+    }
+
+    for change in changes {
+        print_change(ui, change);
+    }
+}
+
 fn print_change(
     ui: &Ui,
     change: &StoreChange<SubjectId, ContextId, ResourceId, OriginId, &'static str>,
@@ -319,20 +366,25 @@ fn print_change(
             ui.detail("origin", origin);
             ui.detail("facet changes", &change_count.to_string());
         }
-        StoreChangeKind::Expired(key) => {
-            let subject = key.address.subject.0;
-            let context = key.address.context.0;
-            let resource = key
+        StoreChangeKind::Expired(expired) => {
+            let subject = expired.key.address.subject.0;
+            let context = expired.key.address.context.0;
+            let resource = expired
+                .key
                 .address
                 .resource
                 .as_ref()
                 .map_or("none", |resource| resource.0);
-            let origin = key.origin.0;
+            let origin = expired.key.origin.0;
             ui.item(&format!("#{} expired", change.sequence));
             ui.detail("subject", subject);
             ui.detail("context", context);
             ui.detail("resource", resource);
             ui.detail("origin", origin);
+            ui.detail(
+                "visibility",
+                &ui.visibility_value(visibility_label(&expired.visibility)),
+            );
         }
     }
 }
