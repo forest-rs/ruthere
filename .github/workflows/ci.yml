@@ -16,6 +16,7 @@ env:
   # List of packages that don't support `no_std`.
   RUST_STD_ONLY_PKGS: >-
     --exclude basic_presence_flow
+    --exclude watcher_presence_flow
   # List of packages that don't support wasip1
   RUST_NO_WASIP1_PKGS:
   # List of packages that don't support wasm32

@@ -1,0 +1,18 @@
+[package]
+name = "watcher_presence_flow"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Executable example that demonstrates the watcher-oriented ruthere flow"
+keywords = ["presence", "example", "watcher"]
+categories = ["command-line-utilities"]
+publish = false
+
+[dependencies]
+ruthere_core.workspace = true
+ruthere_store.workspace = true
+
+[lints]
+workspace = true

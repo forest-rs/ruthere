@@ -36,3 +36,11 @@ dependencies = [
  "hashbrown",
  "ruthere_core",
 ]
+
+[[package]]
+name = "watcher_presence_flow"
+version = "0.1.0"
+dependencies = [
+ "ruthere_core",
+ "ruthere_store",
+]

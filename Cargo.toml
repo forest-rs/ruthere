@@ -4,6 +4,7 @@ members = [
     "crates/ruthere_core",
     "crates/ruthere_store",
     "examples/basic_presence_flow",
+    "examples/watcher_presence_flow",
 ]
 
 [workspace.package]
