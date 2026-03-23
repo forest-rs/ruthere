@@ -13,8 +13,10 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 use hashbrown::{HashMap, hash_map::Entry};
+mod change;
 mod projection;
 
+pub use change::{StoreChange, StoreChangeKind};
 pub use projection::{
     DefaultSubjectProjectionPolicy, SubjectPresenceSummary, SubjectProjectionPolicy,
 };
@@ -96,6 +98,7 @@ where
     E: ExtensionFacet,
 {
     next_sequence: u64,
+    changes: Vec<StoreChange<S, C, R, I, V, E>>,
     entries: HashMap<PresenceEntryKey<S, C, R, I>, SnapshotState<V, E>>,
 }
 
@@ -111,6 +114,7 @@ where
     fn default() -> Self {
         Self {
             next_sequence: 0,
+            changes: Vec::new(),
             entries: HashMap::new(),
         }
     }
@@ -149,10 +153,36 @@ where
         self.next_sequence
     }
 
+    /// Returns `true` when the store has retained changes with a sequence
+    /// greater than `sequence`.
+    #[must_use]
+    pub fn has_changes_since(&self, sequence: u64) -> bool {
+        self.last_sequence() > sequence
+    }
+
+    /// Returns all retained store changes with `sequence > since`.
+    ///
+    /// Change order matches store sequence order.
+    #[must_use]
+    pub fn changes_since(&self, since: u64) -> Vec<StoreChange<S, C, R, I, V, E>> {
+        self.changes
+            .iter()
+            .filter(|change| change.sequence > since)
+            .cloned()
+            .collect()
+    }
+
     /// Publishes an update into the store and returns the assigned sequence.
     ///
     /// Publish order is authoritative within one store instance.
     pub fn publish(&mut self, update: PresenceUpdate<S, C, R, I, V, E>) -> u64 {
+        self.next_sequence = self.next_sequence.saturating_add(1);
+        let sequence = self.next_sequence;
+        self.changes.push(StoreChange {
+            sequence,
+            kind: StoreChangeKind::Published(update.clone()),
+        });
+
         let PresenceUpdate {
             address,
             origin,
@@ -175,8 +205,7 @@ where
         state.expiry = expiry;
         state.apply_changes(changes);
 
-        self.next_sequence = self.next_sequence.saturating_add(1);
-        self.next_sequence
+        sequence
     }
 
     /// Returns a materialized snapshot for one stored entry.
@@ -295,10 +324,28 @@ where
 
     /// Removes expired entries and returns how many were pruned.
     pub fn expire(&mut self, now: Timestamp) -> usize {
-        let initial_len = self.entries.len();
-        self.entries
-            .retain(|_, state| !state.expiry.is_expired_by(now));
-        initial_len.saturating_sub(self.entries.len())
+        let expired_keys = self
+            .entries
+            .iter()
+            .filter_map(|(key, state)| {
+                if state.expiry.is_expired_by(now) {
+                    Some(key.clone())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
+        for key in &expired_keys {
+            self.entries.remove(key);
+            self.next_sequence = self.next_sequence.saturating_add(1);
+            self.changes.push(StoreChange {
+                sequence: self.next_sequence,
+                kind: StoreChangeKind::Expired(key.clone()),
+            });
+        }
+
+        expired_keys.len()
     }
 
     fn materialize_snapshot(
@@ -321,7 +368,7 @@ where
 mod tests {
     use alloc::vec::Vec;
 
-    use super::{InMemoryStore, PresenceEntryKey};
+    use super::{InMemoryStore, PresenceEntryKey, StoreChangeKind};
     use ruthere_core::{
         Activity, Availability, Expiry, ExtensionFacet, PresenceAddress, PresenceFacet,
         PresenceUpdate, Timestamp, Visibility,
@@ -587,5 +634,82 @@ mod tests {
         assert_eq!(summaries[1].subject, 2_u64);
         assert_eq!(summaries[1].availability, Some(Availability::Away));
         assert_eq!(summaries[1].resources.len(), 1);
+    }
+
+    #[test]
+    fn changes_since_returns_published_updates_in_sequence_order() {
+        let mut store = InMemoryStore::<u64, u64, u64, u64, ()>::new();
+
+        store.publish(
+            PresenceUpdate::new(
+                PresenceAddress::new(1_u64, 9_u64, Some(10_u64)),
+                100_u64,
+                Visibility::Public,
+                Timestamp::new(1),
+                Expiry::Never,
+            )
+            .set_activity(Activity::Observing),
+        );
+        store.publish(
+            PresenceUpdate::new(
+                PresenceAddress::new(1_u64, 9_u64, Some(10_u64)),
+                100_u64,
+                Visibility::Public,
+                Timestamp::new(2),
+                Expiry::Never,
+            )
+            .set_activity(Activity::Editing),
+        );
+
+        let changes = store.changes_since(0);
+
+        assert_eq!(changes.len(), 2);
+        assert_eq!(changes[0].sequence, 1);
+        assert_eq!(changes[1].sequence, 2);
+        assert!(matches!(
+            changes[0].kind,
+            StoreChangeKind::Published(PresenceUpdate { .. })
+        ));
+        assert!(store.has_changes_since(1));
+        assert!(!store.has_changes_since(2));
+    }
+
+    #[test]
+    fn expire_emits_expired_changes() {
+        let mut store = InMemoryStore::<u64, u64, u64, u64, ()>::new();
+        let expired_key = PresenceAddress::new(1_u64, 9_u64, Some(10_u64));
+
+        store.publish(
+            PresenceUpdate::new(
+                expired_key.clone(),
+                100_u64,
+                Visibility::Public,
+                Timestamp::new(1),
+                Expiry::At(Timestamp::new(5)),
+            )
+            .set_availability(Availability::Away),
+        );
+        store.publish(
+            PresenceUpdate::new(
+                PresenceAddress::new(2_u64, 9_u64, Some(11_u64)),
+                101_u64,
+                Visibility::Public,
+                Timestamp::new(2),
+                Expiry::Never,
+            )
+            .set_activity(Activity::Observing),
+        );
+
+        let removed = store.expire(Timestamp::new(5));
+        let changes = store.changes_since(2);
+
+        assert_eq!(removed, 1);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].sequence, 3);
+        assert!(matches!(
+            &changes[0].kind,
+            StoreChangeKind::Expired(PresenceEntryKey { address, origin })
+                if *address == expired_key && *origin == 100_u64
+        ));
     }
 }

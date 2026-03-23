@@ -6,7 +6,9 @@
 use ruthere_core::{
     Activity, Availability, Expiry, PresenceAddress, PresenceUpdate, Timestamp, Visibility,
 };
-use ruthere_store::{InMemoryStore, PresenceEntryKey, SubjectPresenceSummary};
+use ruthere_store::{
+    InMemoryStore, PresenceEntryKey, StoreChange, StoreChangeKind, SubjectPresenceSummary,
+};
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 struct SubjectId(&'static str);
@@ -87,6 +89,12 @@ fn main() {
     println!("Published sequences: {first_sequence}, {second_sequence}, {third_sequence}");
     println!("Store sequence after publishes: {}", store.last_sequence());
 
+    println!();
+    println!("Retained changes since sequence 0:");
+    for change in store.changes_since(0) {
+        print_change(&change);
+    }
+
     let browser_key = PresenceEntryKey::new(alice_browser.clone(), browser_origin.clone());
     let browser_snapshot = store
         .snapshot(&browser_key)
@@ -115,6 +123,12 @@ fn main() {
     let removed = store.expire(Timestamp::new(125));
     println!();
     println!("Expired entries at t=125: {removed}");
+
+    println!();
+    println!("Retained changes since sequence 3:");
+    for change in store.changes_since(3) {
+        print_change(&change);
+    }
 
     println!();
     println!("All snapshots in doc-42 after expiry:");
@@ -188,6 +202,40 @@ fn print_summary(summary: &Summary) {
     println!(
         "subject={subject} context={context} dominant_resource={dominant_resource} dominant_origin={dominant_origin} availability={availability} activity={activity} last_seen={last_seen} observed_at={observed_at} resource_count={resource_count}"
     );
+}
+
+fn print_change(change: &StoreChange<SubjectId, ContextId, ResourceId, OriginId, &'static str>) {
+    match &change.kind {
+        StoreChangeKind::Published(update) => {
+            let subject = update.address.subject.0;
+            let context = update.address.context.0;
+            let resource = update
+                .address
+                .resource
+                .as_ref()
+                .map_or("none", |resource| resource.0);
+            let origin = update.origin.0;
+            let change_count = update.changes.len();
+            println!(
+                "sequence={} kind=published subject={subject} context={context} resource={resource} origin={origin} changes={change_count}",
+                change.sequence
+            );
+        }
+        StoreChangeKind::Expired(key) => {
+            let subject = key.address.subject.0;
+            let context = key.address.context.0;
+            let resource = key
+                .address
+                .resource
+                .as_ref()
+                .map_or("none", |resource| resource.0);
+            let origin = key.origin.0;
+            println!(
+                "sequence={} kind=expired subject={subject} context={context} resource={resource} origin={origin}",
+                change.sequence
+            );
+        }
+    }
 }
 
 fn availability_label(value: Availability) -> &'static str {
