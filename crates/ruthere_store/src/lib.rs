@@ -251,9 +251,8 @@ mod tests {
 
     use super::{InMemoryStore, PresenceEntryKey};
     use ruthere_core::{
-        Activity, Availability, BuiltinFacet, BuiltinFacetKind, Expiry, ExtensionFacet,
-        FacetChange, PresenceAddress, PresenceFacet, PresenceFacetKind, PresenceUpdate, Timestamp,
-        Visibility,
+        Activity, Availability, Expiry, ExtensionFacet, PresenceAddress, PresenceFacet,
+        PresenceUpdate, Timestamp, Visibility,
     };
 
     #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -289,12 +288,8 @@ mod tests {
                 Timestamp::new(20),
                 Expiry::At(Timestamp::new(50)),
             )
-            .with_change(FacetChange::Set(PresenceFacet::Builtin(
-                BuiltinFacet::Availability(Availability::Available),
-            )))
-            .with_change(FacetChange::Set(PresenceFacet::Builtin(
-                BuiltinFacet::LastSeen(Timestamp::new(19)),
-            ))),
+            .set_availability(Availability::Available)
+            .set_last_seen(Timestamp::new(19)),
         );
 
         assert_eq!(sequence, 1);
@@ -307,12 +302,8 @@ mod tests {
                 Timestamp::new(21),
                 Expiry::At(Timestamp::new(55)),
             )
-            .with_change(FacetChange::Set(PresenceFacet::Builtin(
-                BuiltinFacet::Activity(Activity::Editing),
-            )))
-            .with_change(FacetChange::Clear(PresenceFacetKind::Builtin(
-                BuiltinFacetKind::LastSeen,
-            ))),
+            .set_activity(Activity::Editing)
+            .clear_last_seen(),
         );
 
         let snapshot = store
@@ -340,9 +331,7 @@ mod tests {
                     Timestamp::new(origin),
                     Expiry::Never,
                 )
-                .with_change(FacetChange::Set(PresenceFacet::Builtin(
-                    BuiltinFacet::Availability(Availability::Available),
-                ))),
+                .set_availability(Availability::Available),
             );
         }
 
@@ -368,9 +357,7 @@ mod tests {
                 Timestamp::new(1),
                 Expiry::Never,
             )
-            .with_change(FacetChange::Set(PresenceFacet::Builtin(
-                BuiltinFacet::Activity(Activity::Observing),
-            ))),
+            .set_activity(Activity::Observing),
         );
 
         store.publish(
@@ -381,9 +368,7 @@ mod tests {
                 Timestamp::new(2),
                 Expiry::Never,
             )
-            .with_change(FacetChange::Set(PresenceFacet::Builtin(
-                BuiltinFacet::Availability(Availability::Away),
-            ))),
+            .set_availability(Availability::Away),
         );
 
         let snapshots = store.snapshots_in_context(&100_u64);
@@ -405,9 +390,7 @@ mod tests {
                 Timestamp::new(5),
                 Expiry::At(Timestamp::new(8)),
             )
-            .with_change(FacetChange::Set(PresenceFacet::Extension(
-                DemoFacet::Focus(99),
-            ))),
+            .set_extension(DemoFacet::Focus(99)),
         );
 
         store.publish(
@@ -418,9 +401,7 @@ mod tests {
                 Timestamp::new(6),
                 Expiry::Never,
             )
-            .with_change(FacetChange::Set(PresenceFacet::Builtin(
-                BuiltinFacet::Availability(Availability::Busy),
-            ))),
+            .set_availability(Availability::Busy),
         );
 
         let removed = store.expire(Timestamp::new(8));

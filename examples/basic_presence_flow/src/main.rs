@@ -4,8 +4,7 @@
 //! Runnable end-to-end example for the basic `ruthere` presence flow.
 
 use ruthere_core::{
-    Activity, Availability, BuiltinFacet, Expiry, FacetChange, PresenceAddress, PresenceFacet,
-    PresenceUpdate, Timestamp, Visibility,
+    Activity, Availability, Expiry, PresenceAddress, PresenceUpdate, Timestamp, Visibility,
 };
 use ruthere_store::{InMemoryStore, PresenceEntryKey};
 
@@ -48,15 +47,9 @@ fn main() {
             Timestamp::new(100),
             Expiry::At(Timestamp::new(160)),
         )
-        .with_change(FacetChange::Set(PresenceFacet::Builtin(
-            BuiltinFacet::Availability(Availability::Available),
-        )))
-        .with_change(FacetChange::Set(PresenceFacet::Builtin(
-            BuiltinFacet::Activity(Activity::Observing),
-        )))
-        .with_change(FacetChange::Set(PresenceFacet::Builtin(
-            BuiltinFacet::LastSeen(Timestamp::new(100)),
-        ))),
+        .set_availability(Availability::Available)
+        .set_activity(Activity::Observing)
+        .set_last_seen(Timestamp::new(100)),
     );
 
     let second_sequence = store.publish(
@@ -67,12 +60,8 @@ fn main() {
             Timestamp::new(110),
             Expiry::At(Timestamp::new(170)),
         )
-        .with_change(FacetChange::Set(PresenceFacet::Builtin(
-            BuiltinFacet::Activity(Activity::Editing),
-        )))
-        .with_change(FacetChange::Set(PresenceFacet::Builtin(
-            BuiltinFacet::LastSeen(Timestamp::new(110)),
-        ))),
+        .set_activity(Activity::Editing)
+        .set_last_seen(Timestamp::new(110)),
     );
 
     let third_sequence = store.publish(
@@ -83,12 +72,8 @@ fn main() {
             Timestamp::new(105),
             Expiry::At(Timestamp::new(120)),
         )
-        .with_change(FacetChange::Set(PresenceFacet::Builtin(
-            BuiltinFacet::Availability(Availability::Away),
-        )))
-        .with_change(FacetChange::Set(PresenceFacet::Builtin(
-            BuiltinFacet::Activity(Activity::Observing),
-        ))),
+        .set_availability(Availability::Away)
+        .set_activity(Activity::Observing),
     );
 
     println!("Published sequences: {first_sequence}, {second_sequence}, {third_sequence}");

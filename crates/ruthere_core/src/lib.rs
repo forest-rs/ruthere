@@ -225,6 +225,35 @@ where
     Clear(PresenceFacetKind<E::Kind>),
 }
 
+impl<E> FacetChange<E>
+where
+    E: ExtensionFacet,
+{
+    /// Creates a change that sets a built-in facet.
+    #[must_use]
+    pub fn set_builtin(facet: BuiltinFacet) -> Self {
+        Self::Set(PresenceFacet::Builtin(facet))
+    }
+
+    /// Creates a change that sets an extension facet.
+    #[must_use]
+    pub fn set_extension(facet: E) -> Self {
+        Self::Set(PresenceFacet::Extension(facet))
+    }
+
+    /// Creates a change that clears a built-in facet kind.
+    #[must_use]
+    pub fn clear_builtin(kind: BuiltinFacetKind) -> Self {
+        Self::Clear(PresenceFacetKind::Builtin(kind))
+    }
+
+    /// Creates a change that clears an extension facet kind.
+    #[must_use]
+    pub fn clear_extension(kind: E::Kind) -> Self {
+        Self::Clear(PresenceFacetKind::Extension(kind))
+    }
+}
+
 /// The addressed scope of a presence update or snapshot.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct PresenceAddress<S, C, R> {
@@ -297,6 +326,66 @@ where
         self.changes.push(change);
         self
     }
+
+    /// Appends a change that sets a built-in facet.
+    #[must_use]
+    pub fn set_builtin(self, facet: BuiltinFacet) -> Self {
+        self.with_change(FacetChange::set_builtin(facet))
+    }
+
+    /// Appends a change that sets an extension facet.
+    #[must_use]
+    pub fn set_extension(self, facet: E) -> Self {
+        self.with_change(FacetChange::set_extension(facet))
+    }
+
+    /// Appends a change that clears a built-in facet kind.
+    #[must_use]
+    pub fn clear_builtin(self, kind: BuiltinFacetKind) -> Self {
+        self.with_change(FacetChange::clear_builtin(kind))
+    }
+
+    /// Appends a change that clears an extension facet kind.
+    #[must_use]
+    pub fn clear_extension(self, kind: E::Kind) -> Self {
+        self.with_change(FacetChange::clear_extension(kind))
+    }
+
+    /// Appends a change that sets availability.
+    #[must_use]
+    pub fn set_availability(self, value: Availability) -> Self {
+        self.set_builtin(BuiltinFacet::Availability(value))
+    }
+
+    /// Appends a change that sets activity.
+    #[must_use]
+    pub fn set_activity(self, value: Activity) -> Self {
+        self.set_builtin(BuiltinFacet::Activity(value))
+    }
+
+    /// Appends a change that sets last-seen time.
+    #[must_use]
+    pub fn set_last_seen(self, value: Timestamp) -> Self {
+        self.set_builtin(BuiltinFacet::LastSeen(value))
+    }
+
+    /// Appends a change that clears availability.
+    #[must_use]
+    pub fn clear_availability(self) -> Self {
+        self.clear_builtin(BuiltinFacetKind::Availability)
+    }
+
+    /// Appends a change that clears activity.
+    #[must_use]
+    pub fn clear_activity(self) -> Self {
+        self.clear_builtin(BuiltinFacetKind::Activity)
+    }
+
+    /// Appends a change that clears last-seen time.
+    #[must_use]
+    pub fn clear_last_seen(self) -> Self {
+        self.clear_builtin(BuiltinFacetKind::LastSeen)
+    }
 }
 
 /// A materialized current view of presence for one scope and origin.
@@ -349,6 +438,18 @@ where
         self
     }
 
+    /// Appends a built-in facet and returns the updated value.
+    #[must_use]
+    pub fn with_builtin(self, facet: BuiltinFacet) -> Self {
+        self.with_facet(PresenceFacet::Builtin(facet))
+    }
+
+    /// Appends an extension facet and returns the updated value.
+    #[must_use]
+    pub fn with_extension(self, facet: E) -> Self {
+        self.with_facet(PresenceFacet::Extension(facet))
+    }
+
     /// Returns the materialized built-in availability, if present.
     #[must_use]
     pub fn availability(&self) -> Option<Availability> {
@@ -380,9 +481,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        Activity, Availability, BuiltinFacet, BuiltinFacetKind, Expiry, ExtensionFacet,
-        FacetChange, Never, PresenceAddress, PresenceFacet, PresenceFacetKind, PresenceSnapshot,
-        PresenceUpdate, Timestamp, Visibility,
+        Activity, Availability, BuiltinFacet, BuiltinFacetKind, Expiry, ExtensionFacet, Never,
+        PresenceAddress, PresenceFacet, PresenceFacetKind, PresenceSnapshot, PresenceUpdate,
+        Timestamp, Visibility,
     };
 
     #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -448,16 +549,10 @@ mod tests {
             Timestamp::new(12),
             Expiry::At(Timestamp::new(20)),
         )
-        .with_facet(PresenceFacet::Builtin(BuiltinFacet::Availability(
-            Availability::Available,
-        )))
-        .with_facet(PresenceFacet::Builtin(BuiltinFacet::Activity(
-            Activity::Observing,
-        )))
-        .with_facet(PresenceFacet::Builtin(BuiltinFacet::LastSeen(
-            Timestamp::new(11),
-        )))
-        .with_facet(PresenceFacet::Extension(DemoFacet::Focus(5)));
+        .with_builtin(BuiltinFacet::Availability(Availability::Available))
+        .with_builtin(BuiltinFacet::Activity(Activity::Observing))
+        .with_builtin(BuiltinFacet::LastSeen(Timestamp::new(11)))
+        .with_extension(DemoFacet::Focus(5));
 
         assert_eq!(snapshot.availability(), Some(Availability::Available));
         assert_eq!(snapshot.activity(), Some(Activity::Observing));
@@ -473,12 +568,8 @@ mod tests {
             Timestamp::new(40),
             Expiry::Never,
         )
-        .with_change(FacetChange::Set(PresenceFacet::Builtin(
-            BuiltinFacet::Availability(Availability::Away),
-        )))
-        .with_change(FacetChange::Clear(PresenceFacetKind::Builtin(
-            BuiltinFacetKind::LastSeen,
-        )));
+        .set_availability(Availability::Away)
+        .clear_last_seen();
 
         assert_eq!(update.address.subject, 10);
         assert_eq!(update.address.context, 20);
