@@ -3,6 +3,13 @@
 
 //! Runnable end-to-end example for the basic `ruthere` presence flow.
 
+use std::{
+    env,
+    fmt::Write,
+    io::{self, IsTerminal},
+    ops::BitOr,
+};
+
 use ruthere_core::{
     Activity, Availability, Expiry, PresenceAddress, PresenceUpdate, Timestamp, Visibility,
 };
@@ -34,7 +41,16 @@ type Summary = SubjectPresenceSummary<
     ruthere_core::Never,
 >;
 
+const COLOR_BLUE: u8 = 34;
+const COLOR_CYAN: u8 = 36;
+const COLOR_GREEN: u8 = 32;
+const COLOR_MAGENTA: u8 = 35;
+const COLOR_RED: u8 = 31;
+const COLOR_WHITE: u8 = 37;
+const COLOR_YELLOW: u8 = 33;
+
 fn main() {
+    let ui = Ui::detect();
     let mut store = Store::new();
 
     let doc = ContextId("doc-42");
@@ -86,13 +102,19 @@ fn main() {
         .set_activity(Activity::Observing),
     );
 
-    println!("Published sequences: {first_sequence}, {second_sequence}, {third_sequence}");
-    println!("Store sequence after publishes: {}", store.last_sequence());
+    ui.banner("🧭", "Basic Presence Flow");
+    ui.kv(
+        "published sequences",
+        &format!("{first_sequence}, {second_sequence}, {third_sequence}"),
+    );
+    ui.kv(
+        "store sequence after publish",
+        &store.last_sequence().to_string(),
+    );
 
-    println!();
-    println!("Retained changes since sequence 0:");
+    ui.section("📡", "Retained Changes Since #0");
     for change in store.changes_since(0) {
-        print_change(&change);
+        print_change(&ui, &change);
     }
 
     let browser_key = PresenceEntryKey::new(alice_browser.clone(), browser_origin.clone());
@@ -100,50 +122,44 @@ fn main() {
         .snapshot(&browser_key)
         .expect("browser entry should be present after publish");
 
-    println!();
-    println!("Single snapshot lookup:");
-    print_snapshot(&browser_snapshot);
+    ui.section("🧾", "Single Snapshot Lookup");
+    print_snapshot(&ui, &browser_snapshot);
 
-    println!();
-    println!("All snapshots in doc-42 before expiry:");
+    ui.section("🗂️", "Raw Resource Snapshots Before Expiry");
     let mut snapshots = store.snapshots_in_context(&doc);
     snapshots.sort_by(snapshot_sort_key);
     for snapshot in &snapshots {
-        print_snapshot(snapshot);
+        print_snapshot(&ui, snapshot);
     }
 
-    println!();
-    println!("Projected subject summaries in doc-42 before expiry:");
+    ui.section("👤", "Projected Subject Summaries Before Expiry");
     let mut summaries = store.subject_summaries_in_context(&doc);
     summaries.sort_by(summary_sort_key);
     for summary in &summaries {
-        print_summary(summary);
+        print_summary(&ui, summary);
     }
 
     let removed = store.expire(Timestamp::new(125));
-    println!();
-    println!("Expired entries at t=125: {removed}");
+    ui.section("⏳", "Expiry Applied At t=125");
+    ui.kv("removed entries", &removed.to_string());
 
-    println!();
-    println!("Retained changes since sequence 3:");
+    ui.section("📡", "Retained Changes Since #3");
     for change in store.changes_since(3) {
-        print_change(&change);
+        print_change(&ui, &change);
     }
 
-    println!();
-    println!("All snapshots in doc-42 after expiry:");
+    ui.section("🗂️", "Raw Resource Snapshots After Expiry");
     let mut snapshots = store.snapshots_in_context(&doc);
     snapshots.sort_by(snapshot_sort_key);
     for snapshot in &snapshots {
-        print_snapshot(snapshot);
+        print_snapshot(&ui, snapshot);
     }
 
-    println!();
-    println!("Projected subject summaries in doc-42 after expiry:");
+    ui.section("👤", "Projected Subject Summaries After Expiry");
     let mut summaries = store.subject_summaries_in_context(&doc);
     summaries.sort_by(summary_sort_key);
     for summary in &summaries {
-        print_summary(summary);
+        print_summary(&ui, summary);
     }
 }
 
@@ -159,7 +175,7 @@ fn summary_sort_key(left: &Summary, right: &Summary) -> core::cmp::Ordering {
     left.subject.cmp(&right.subject)
 }
 
-fn print_snapshot(snapshot: &Snapshot) {
+fn print_snapshot(ui: &Ui, snapshot: &Snapshot) {
     let subject = snapshot.address.subject.0;
     let context = snapshot.address.context.0;
     let resource = snapshot
@@ -168,8 +184,6 @@ fn print_snapshot(snapshot: &Snapshot) {
         .as_ref()
         .map_or("none", |resource| resource.0);
     let origin = snapshot.origin.0;
-    let availability = snapshot.availability().map_or("none", availability_label);
-    let activity = snapshot.activity().map_or("none", activity_label);
     let last_seen = snapshot.last_seen().map_or_else(
         || String::from("none"),
         |timestamp| timestamp.get().to_string(),
@@ -177,12 +191,19 @@ fn print_snapshot(snapshot: &Snapshot) {
     let visibility = visibility_label(&snapshot.visibility);
     let expires = expiry_label(snapshot.expiry);
 
-    println!(
-        "subject={subject} context={context} resource={resource} origin={origin} availability={availability} activity={activity} last_seen={last_seen} visibility={visibility} expiry={expires}"
+    ui.item(&format!("{subject} in {context} via {resource}"));
+    ui.detail("origin", origin);
+    ui.detail(
+        "availability",
+        &ui.availability_value(snapshot.availability()),
     );
+    ui.detail("activity", &ui.activity_value(snapshot.activity()));
+    ui.detail("last seen", &last_seen);
+    ui.detail("visibility", &ui.visibility_value(visibility));
+    ui.detail("expiry", &expires);
 }
 
-fn print_summary(summary: &Summary) {
+fn print_summary(ui: &Ui, summary: &Summary) {
     let subject = summary.subject.0;
     let context = summary.context.0;
     let dominant_resource = summary
@@ -190,8 +211,6 @@ fn print_summary(summary: &Summary) {
         .as_ref()
         .map_or("none", |resource| resource.0);
     let dominant_origin = summary.dominant_origin.0;
-    let availability = summary.availability.map_or("none", availability_label);
-    let activity = summary.activity.map_or("none", activity_label);
     let last_seen = summary.last_seen.map_or_else(
         || String::from("none"),
         |timestamp| timestamp.get().to_string(),
@@ -199,12 +218,22 @@ fn print_summary(summary: &Summary) {
     let observed_at = summary.observed_at.get();
     let resource_count = summary.resources.len();
 
-    println!(
-        "subject={subject} context={context} dominant_resource={dominant_resource} dominant_origin={dominant_origin} availability={availability} activity={activity} last_seen={last_seen} observed_at={observed_at} resource_count={resource_count}"
+    ui.item(&format!("{subject} in {context}"));
+    ui.detail(
+        "headline",
+        &ui.headline_value(summary.availability, summary.activity),
     );
+    ui.detail("dominant resource", dominant_resource);
+    ui.detail("dominant origin", dominant_origin);
+    ui.detail("last seen", &last_seen);
+    ui.detail("observed at", &observed_at.to_string());
+    ui.detail("resource count", &resource_count.to_string());
 }
 
-fn print_change(change: &StoreChange<SubjectId, ContextId, ResourceId, OriginId, &'static str>) {
+fn print_change(
+    ui: &Ui,
+    change: &StoreChange<SubjectId, ContextId, ResourceId, OriginId, &'static str>,
+) {
     match &change.kind {
         StoreChangeKind::Published(update) => {
             let subject = update.address.subject.0;
@@ -216,10 +245,12 @@ fn print_change(change: &StoreChange<SubjectId, ContextId, ResourceId, OriginId,
                 .map_or("none", |resource| resource.0);
             let origin = update.origin.0;
             let change_count = update.changes.len();
-            println!(
-                "sequence={} kind=published subject={subject} context={context} resource={resource} origin={origin} changes={change_count}",
-                change.sequence
-            );
+            ui.item(&format!("#{} published", change.sequence));
+            ui.detail("subject", subject);
+            ui.detail("context", context);
+            ui.detail("resource", resource);
+            ui.detail("origin", origin);
+            ui.detail("facet changes", &change_count.to_string());
         }
         StoreChangeKind::Expired(key) => {
             let subject = key.address.subject.0;
@@ -230,33 +261,147 @@ fn print_change(change: &StoreChange<SubjectId, ContextId, ResourceId, OriginId,
                 .as_ref()
                 .map_or("none", |resource| resource.0);
             let origin = key.origin.0;
-            println!(
-                "sequence={} kind=expired subject={subject} context={context} resource={resource} origin={origin}",
-                change.sequence
-            );
+            ui.item(&format!("#{} expired", change.sequence));
+            ui.detail("subject", subject);
+            ui.detail("context", context);
+            ui.detail("resource", resource);
+            ui.detail("origin", origin);
         }
     }
 }
 
-fn availability_label(value: Availability) -> &'static str {
-    match value {
-        Availability::Available => "available",
-        Availability::Busy => "busy",
-        Availability::Away => "away",
-        Availability::Offline => "offline",
-        Availability::Unknown => "unknown",
+#[derive(Clone, Copy, Debug)]
+struct Ui {
+    color: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct StyleFlags(u8);
+
+impl StyleFlags {
+    const NONE: Self = Self(0);
+    const BOLD: Self = Self(1 << 0);
+    const DIM: Self = Self(1 << 1);
+
+    fn contains(self, other: Self) -> bool {
+        self.0 & other.0 != 0
     }
 }
 
-fn activity_label(value: Activity) -> &'static str {
-    match value {
-        Activity::Idle => "idle",
-        Activity::Observing => "observing",
-        Activity::Navigating => "navigating",
-        Activity::Editing => "editing",
-        Activity::Presenting => "presenting",
-        Activity::Acting => "acting",
-        Activity::Custom(..) => "custom",
+impl BitOr for StyleFlags {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        Self(self.0 | rhs.0)
+    }
+}
+
+impl Ui {
+    fn detect() -> Self {
+        Self {
+            color: io::stdout().is_terminal() && env::var_os("NO_COLOR").is_none(),
+        }
+    }
+
+    fn banner(&self, icon: &str, title: &str) {
+        println!(
+            "{}",
+            self.paint(&format!("{icon} {title}"), COLOR_CYAN, StyleFlags::BOLD)
+        );
+    }
+
+    fn section(&self, icon: &str, title: &str) {
+        println!();
+        println!(
+            "{}",
+            self.paint(&format!("{icon} {title}"), COLOR_CYAN, StyleFlags::BOLD)
+        );
+    }
+
+    fn item(&self, title: &str) {
+        println!(
+            "  {}",
+            self.paint(&format!("• {title}"), COLOR_WHITE, StyleFlags::BOLD)
+        );
+    }
+
+    fn kv(&self, label: &str, value: &str) {
+        println!(
+            "  {} {}",
+            self.paint(&format!("{label:>24}:"), COLOR_WHITE, StyleFlags::NONE),
+            value
+        );
+    }
+
+    fn detail(&self, label: &str, value: &str) {
+        println!(
+            "    {} {}",
+            self.paint(&format!("{label:>18}:"), COLOR_WHITE, StyleFlags::NONE),
+            value
+        );
+    }
+
+    fn availability_value(&self, value: Option<Availability>) -> String {
+        match value {
+            Some(Availability::Available) => self.paint("available", COLOR_GREEN, StyleFlags::BOLD),
+            Some(Availability::Busy) => self.paint("busy", COLOR_RED, StyleFlags::BOLD),
+            Some(Availability::Away) => self.paint("away", COLOR_YELLOW, StyleFlags::BOLD),
+            Some(Availability::Offline) => self.paint("offline", COLOR_WHITE, StyleFlags::NONE),
+            Some(Availability::Unknown) => String::from("unknown"),
+            None => String::from("none"),
+        }
+    }
+
+    fn activity_value(&self, value: Option<Activity>) -> String {
+        match value {
+            Some(Activity::Editing) => self.paint("editing", COLOR_MAGENTA, StyleFlags::BOLD),
+            Some(Activity::Presenting) => self.paint("presenting", COLOR_BLUE, StyleFlags::BOLD),
+            Some(Activity::Acting) => self.paint("acting", COLOR_CYAN, StyleFlags::BOLD),
+            Some(Activity::Observing) => self.paint("observing", COLOR_GREEN, StyleFlags::NONE),
+            Some(Activity::Navigating) => String::from("navigating"),
+            Some(Activity::Idle) => String::from("idle"),
+            Some(Activity::Custom(..)) => String::from("custom"),
+            None => String::from("none"),
+        }
+    }
+
+    fn visibility_value(&self, value: &'static str) -> String {
+        self.paint(value, COLOR_BLUE, StyleFlags::NONE)
+    }
+
+    fn headline_value(
+        &self,
+        availability: Option<Availability>,
+        activity: Option<Activity>,
+    ) -> String {
+        format!(
+            "{} • {}",
+            self.availability_value(availability),
+            self.activity_value(activity)
+        )
+    }
+
+    fn paint(&self, value: &str, color: u8, flags: StyleFlags) -> String {
+        if !self.color {
+            return value.to_string();
+        }
+
+        let mut codes = String::new();
+        if flags.contains(StyleFlags::BOLD) {
+            codes.push('1');
+        }
+        if flags.contains(StyleFlags::DIM) {
+            if !codes.is_empty() {
+                codes.push(';');
+            }
+            codes.push('2');
+        }
+        if !codes.is_empty() {
+            codes.push(';');
+        }
+        let _ = write!(&mut codes, "{color}");
+
+        format!("\u{1b}[{codes}m{value}\u{1b}[0m")
     }
 }
 
