@@ -6,7 +6,7 @@
 use ruthere_core::{
     Activity, Availability, Expiry, PresenceAddress, PresenceUpdate, Timestamp, Visibility,
 };
-use ruthere_store::{InMemoryStore, PresenceEntryKey};
+use ruthere_store::{InMemoryStore, PresenceEntryKey, SubjectPresenceSummary};
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 struct SubjectId(&'static str);
@@ -23,6 +23,14 @@ struct OriginId(&'static str);
 type Store = InMemoryStore<SubjectId, ContextId, ResourceId, OriginId, &'static str>;
 type Snapshot =
     ruthere_core::PresenceSnapshot<SubjectId, ContextId, ResourceId, OriginId, &'static str>;
+type Summary = SubjectPresenceSummary<
+    SubjectId,
+    ContextId,
+    ResourceId,
+    OriginId,
+    &'static str,
+    ruthere_core::Never,
+>;
 
 fn main() {
     let mut store = Store::new();
@@ -96,6 +104,14 @@ fn main() {
         print_snapshot(snapshot);
     }
 
+    println!();
+    println!("Projected subject summaries in doc-42 before expiry:");
+    let mut summaries = store.subject_summaries_in_context(&doc);
+    summaries.sort_by(summary_sort_key);
+    for summary in &summaries {
+        print_summary(summary);
+    }
+
     let removed = store.expire(Timestamp::new(125));
     println!();
     println!("Expired entries at t=125: {removed}");
@@ -107,6 +123,14 @@ fn main() {
     for snapshot in &snapshots {
         print_snapshot(snapshot);
     }
+
+    println!();
+    println!("Projected subject summaries in doc-42 after expiry:");
+    let mut summaries = store.subject_summaries_in_context(&doc);
+    summaries.sort_by(summary_sort_key);
+    for summary in &summaries {
+        print_summary(summary);
+    }
 }
 
 fn snapshot_sort_key(left: &Snapshot, right: &Snapshot) -> core::cmp::Ordering {
@@ -115,6 +139,10 @@ fn snapshot_sort_key(left: &Snapshot, right: &Snapshot) -> core::cmp::Ordering {
         .cmp(&right.address.subject)
         .then_with(|| left.address.resource.cmp(&right.address.resource))
         .then_with(|| left.origin.cmp(&right.origin))
+}
+
+fn summary_sort_key(left: &Summary, right: &Summary) -> core::cmp::Ordering {
+    left.subject.cmp(&right.subject)
 }
 
 fn print_snapshot(snapshot: &Snapshot) {
@@ -137,6 +165,28 @@ fn print_snapshot(snapshot: &Snapshot) {
 
     println!(
         "subject={subject} context={context} resource={resource} origin={origin} availability={availability} activity={activity} last_seen={last_seen} visibility={visibility} expiry={expires}"
+    );
+}
+
+fn print_summary(summary: &Summary) {
+    let subject = summary.subject.0;
+    let context = summary.context.0;
+    let dominant_resource = summary
+        .dominant_resource
+        .as_ref()
+        .map_or("none", |resource| resource.0);
+    let dominant_origin = summary.dominant_origin.0;
+    let availability = summary.availability.map_or("none", availability_label);
+    let activity = summary.activity.map_or("none", activity_label);
+    let last_seen = summary.last_seen.map_or_else(
+        || String::from("none"),
+        |timestamp| timestamp.get().to_string(),
+    );
+    let observed_at = summary.observed_at.get();
+    let resource_count = summary.resources.len();
+
+    println!(
+        "subject={subject} context={context} dominant_resource={dominant_resource} dominant_origin={dominant_origin} availability={availability} activity={activity} last_seen={last_seen} observed_at={observed_at} resource_count={resource_count}"
     );
 }
 

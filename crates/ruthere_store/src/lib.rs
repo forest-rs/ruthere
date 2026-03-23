@@ -13,6 +13,12 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 use hashbrown::{HashMap, hash_map::Entry};
+mod projection;
+
+pub use projection::{
+    DefaultSubjectProjectionPolicy, SubjectPresenceSummary, SubjectProjectionPolicy,
+};
+use projection::{group_snapshots_by_subject, summarize_subject};
 use ruthere_core::{
     Expiry, ExtensionFacet, FacetChange, Never, PresenceAddress, PresenceFacet, PresenceFacetKind,
     PresenceKey, PresenceSnapshot, PresenceUpdate, Timestamp, Visibility,
@@ -221,6 +227,72 @@ where
             .collect()
     }
 
+    /// Returns a projected summary for one subject in a context using the
+    /// default subject projection policy.
+    #[must_use]
+    pub fn subject_summary_in_context(
+        &self,
+        subject: &S,
+        context: &C,
+    ) -> Option<SubjectPresenceSummary<S, C, R, I, V, E>> {
+        self.subject_summary_in_context_with_policy(
+            subject,
+            context,
+            &DefaultSubjectProjectionPolicy,
+        )
+    }
+
+    /// Returns a projected summary for one subject in a context using the
+    /// provided subject projection policy.
+    #[must_use]
+    pub fn subject_summary_in_context_with_policy<P>(
+        &self,
+        subject: &S,
+        context: &C,
+        policy: &P,
+    ) -> Option<SubjectPresenceSummary<S, C, R, I, V, E>>
+    where
+        P: SubjectProjectionPolicy,
+    {
+        let snapshots = self
+            .snapshots_in_context(context)
+            .into_iter()
+            .filter(|snapshot| &snapshot.address.subject == subject)
+            .collect::<Vec<_>>();
+
+        group_snapshots_by_subject(snapshots)
+            .into_iter()
+            .next()
+            .map(|group| summarize_subject(group, policy))
+    }
+
+    /// Returns projected subject summaries for all subjects in a context using
+    /// the default subject projection policy.
+    #[must_use]
+    pub fn subject_summaries_in_context(
+        &self,
+        context: &C,
+    ) -> Vec<SubjectPresenceSummary<S, C, R, I, V, E>> {
+        self.subject_summaries_in_context_with_policy(context, &DefaultSubjectProjectionPolicy)
+    }
+
+    /// Returns projected subject summaries for all subjects in a context using
+    /// the provided subject projection policy.
+    #[must_use]
+    pub fn subject_summaries_in_context_with_policy<P>(
+        &self,
+        context: &C,
+        policy: &P,
+    ) -> Vec<SubjectPresenceSummary<S, C, R, I, V, E>>
+    where
+        P: SubjectProjectionPolicy,
+    {
+        group_snapshots_by_subject(self.snapshots_in_context(context))
+            .into_iter()
+            .map(|group| summarize_subject(group, policy))
+            .collect()
+    }
+
     /// Removes expired entries and returns how many were pruned.
     pub fn expire(&mut self, now: Timestamp) -> usize {
         let initial_len = self.entries.len();
@@ -420,5 +492,100 @@ mod tests {
                 .iter()
                 .all(|facet| *facet != PresenceFacet::Extension(DemoFacet::Focus(99)))
         );
+    }
+
+    #[test]
+    fn subject_projection_prefers_active_resource_and_keeps_detail() {
+        let mut store = InMemoryStore::<u64, u64, u64, u64, &'static str>::new();
+        let browser = PresenceAddress::new(1_u64, 42_u64, Some(10_u64));
+        let mobile = PresenceAddress::new(1_u64, 42_u64, Some(11_u64));
+
+        store.publish(
+            PresenceUpdate::new(
+                browser.clone(),
+                100_u64,
+                Visibility::Restricted("members"),
+                Timestamp::new(100),
+                Expiry::At(Timestamp::new(170)),
+            )
+            .set_availability(Availability::Available)
+            .set_activity(Activity::Editing)
+            .set_last_seen(Timestamp::new(110)),
+        );
+
+        store.publish(
+            PresenceUpdate::new(
+                mobile.clone(),
+                101_u64,
+                Visibility::Restricted("members"),
+                Timestamp::new(105),
+                Expiry::At(Timestamp::new(120)),
+            )
+            .set_availability(Availability::Away)
+            .set_activity(Activity::Observing),
+        );
+
+        let summary = store
+            .subject_summary_in_context(&1_u64, &42_u64)
+            .expect("missing subject summary");
+
+        assert_eq!(summary.subject, 1_u64);
+        assert_eq!(summary.context, 42_u64);
+        assert_eq!(summary.dominant_resource, Some(10_u64));
+        assert_eq!(summary.dominant_origin, 100_u64);
+        assert_eq!(summary.availability, Some(Availability::Available));
+        assert_eq!(summary.activity, Some(Activity::Editing));
+        assert_eq!(summary.last_seen, Some(Timestamp::new(110)));
+        assert_eq!(summary.observed_at, Timestamp::new(105));
+        assert_eq!(summary.resources.len(), 2);
+    }
+
+    #[test]
+    fn subject_summaries_group_by_subject() {
+        let mut store = InMemoryStore::<u64, u64, u64, u64, ()>::new();
+
+        store.publish(
+            PresenceUpdate::new(
+                PresenceAddress::new(1_u64, 5_u64, Some(10_u64)),
+                100_u64,
+                Visibility::Public,
+                Timestamp::new(1),
+                Expiry::Never,
+            )
+            .set_activity(Activity::Observing),
+        );
+
+        store.publish(
+            PresenceUpdate::new(
+                PresenceAddress::new(1_u64, 5_u64, Some(11_u64)),
+                101_u64,
+                Visibility::Public,
+                Timestamp::new(2),
+                Expiry::Never,
+            )
+            .set_activity(Activity::Editing),
+        );
+
+        store.publish(
+            PresenceUpdate::new(
+                PresenceAddress::new(2_u64, 5_u64, Some(12_u64)),
+                102_u64,
+                Visibility::Public,
+                Timestamp::new(3),
+                Expiry::Never,
+            )
+            .set_availability(Availability::Away),
+        );
+
+        let mut summaries = store.subject_summaries_in_context(&5_u64);
+        summaries.sort_by(|left, right| left.subject.cmp(&right.subject));
+
+        assert_eq!(summaries.len(), 2);
+        assert_eq!(summaries[0].subject, 1_u64);
+        assert_eq!(summaries[0].activity, Some(Activity::Editing));
+        assert_eq!(summaries[0].resources.len(), 2);
+        assert_eq!(summaries[1].subject, 2_u64);
+        assert_eq!(summaries[1].availability, Some(Availability::Away));
+        assert_eq!(summaries[1].resources.len(), 1);
     }
 }
