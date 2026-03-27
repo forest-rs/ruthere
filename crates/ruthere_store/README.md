@@ -12,10 +12,12 @@ resource detail.
 
 It now also retains a local change log so callers can consume incremental
 changes with store-assigned cursors.
+`WatcherCursor` provides a calmer local watcher abstraction over that retained
+change log without introducing push delivery semantics.
 
 Filtered read APIs let callers apply their own visibility policy to snapshots
 and subject summaries without moving that policy into `ruthere_core`.
 Filtered cursor APIs now apply that same visibility policy to retained changes.
 
-The crate does not yet define subscriptions, watcher policy evaluation, or
-transport integration.
+The crate does not yet define watcher identity, push subscriptions, watcher
+policy evaluation, or transport integration.

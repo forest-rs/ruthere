@@ -7,8 +7,8 @@ It demonstrates one narrow loop with concrete key types:
 
 - create an in-memory store
 - publish presence updates with different visibility labels
-- track `last_seen_sequence` for multiple viewers
-- poll `has_visible_changes_since` / `changes_since_visible`
+- track `WatcherCursor` state for multiple viewers
+- poll `has_pending_visible` / `poll_visible`
 - refresh subject summaries only when a viewer sees something new
 - react to expiry without introducing transport or async machinery
 

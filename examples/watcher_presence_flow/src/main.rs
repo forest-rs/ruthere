@@ -16,6 +16,7 @@ use ruthere_core::{
 };
 use ruthere_store::{
     InMemoryStore, StoreChange, StoreChangeKind, SubjectPresenceSummary, VisibilityPolicy,
+    WatcherCursor,
 };
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -77,8 +78,8 @@ fn main() {
     let public_only =
         |visibility: &Visibility<&'static str>| matches!(visibility, Visibility::Public);
 
-    let mut member_cursor = 0;
-    let mut public_cursor = 0;
+    let mut member_cursor = WatcherCursor::new();
+    let mut public_cursor = WatcherCursor::new();
 
     ui.banner("👀", "Watcher Presence Flow");
     ui.kv("context", doc.0);
@@ -248,26 +249,25 @@ fn poll_viewer<P>(
     store: &Store,
     context: &ContextId,
     watcher: &str,
-    cursor: &mut u64,
+    cursor: &mut WatcherCursor,
     visibility: &P,
 ) where
     P: VisibilityPolicy<&'static str>,
 {
-    let before = *cursor;
+    let before = cursor.sequence();
 
     ui.item(watcher);
     ui.detail("cursor before", &format!("#{before}"));
 
-    if !store.has_visible_changes_since(before, visibility) {
+    if !cursor.has_pending_visible(store, visibility) {
         ui.detail("changes", &ui.muted_value("none"));
         ui.detail("cursor after", &format!("#{before}"));
         ui.detail("summary refresh", &ui.muted_value("skipped"));
         return;
     }
 
-    let changes = store.changes_since_visible(before, visibility);
-    let after = changes.last().map_or(before, |change| change.sequence);
-    *cursor = after;
+    let changes = cursor.poll_visible(store, visibility);
+    let after = cursor.sequence();
 
     ui.detail("changes", &changes.len().to_string());
     ui.detail("cursor after", &ui.cursor_value(&format!("#{after}")));

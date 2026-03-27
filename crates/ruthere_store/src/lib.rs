@@ -6,18 +6,21 @@
 //! In-memory runtime store for `ruthere` presence updates.
 //!
 //! `ruthere_store` owns sequencing, reduction, and expiry for a local store.
-//! It intentionally does not yet define subscriptions, watcher identity, or
-//! transport integration.
+//! It also provides local watcher cursors over the retained change log without
+//! taking ownership of push delivery, watcher identity, or transport
+//! integration.
 
 extern crate alloc;
 
 use alloc::vec::Vec;
 use hashbrown::{HashMap, hash_map::Entry};
 mod change;
+mod cursor;
 mod projection;
 mod visibility;
 
 pub use change::{StoreChange, StoreChangeKind, StoreExpired};
+pub use cursor::WatcherCursor;
 pub use projection::{
     DefaultSubjectProjectionPolicy, SubjectPresenceSummary, SubjectProjectionPolicy,
 };
@@ -575,7 +578,7 @@ where
 mod tests {
     use alloc::vec::Vec;
 
-    use super::{InMemoryStore, PresenceEntryKey, StoreChangeKind, StoreExpired};
+    use super::{InMemoryStore, PresenceEntryKey, StoreChangeKind, StoreExpired, WatcherCursor};
     use ruthere_core::{
         Activity, Availability, Expiry, ExtensionFacet, PresenceAddress, PresenceFacet,
         PresenceUpdate, Timestamp, Visibility,
@@ -1067,5 +1070,99 @@ mod tests {
         ));
         assert!(store.has_visible_changes_since(2, &member_view));
         assert!(!store.has_visible_changes_since(2, &public_only));
+    }
+
+    #[test]
+    fn watcher_cursor_polls_changes_once() {
+        let mut store = InMemoryStore::<u64, u64, u64, u64, &'static str>::new();
+        let address = PresenceAddress::new(7_u64, 9_u64, Some(3_u64));
+
+        store.publish(
+            PresenceUpdate::new(
+                address.clone(),
+                11_u64,
+                Visibility::Public,
+                Timestamp::new(20),
+                Expiry::At(Timestamp::new(40)),
+            )
+            .set_availability(Availability::Available),
+        );
+        store.publish(
+            PresenceUpdate::new(
+                address,
+                11_u64,
+                Visibility::Public,
+                Timestamp::new(21),
+                Expiry::At(Timestamp::new(50)),
+            )
+            .set_activity(Activity::Editing),
+        );
+
+        let mut watcher = WatcherCursor::new();
+        assert!(watcher.has_pending(&store));
+
+        let first_poll = watcher.poll(&store);
+        assert_eq!(first_poll.len(), 2);
+        assert_eq!(watcher.sequence(), 2);
+        assert!(!watcher.has_pending(&store));
+
+        let second_poll = watcher.poll(&store);
+        assert!(second_poll.is_empty());
+        assert_eq!(watcher.sequence(), 2);
+    }
+
+    #[test]
+    fn watcher_cursor_polls_visible_changes_once() {
+        let mut store = InMemoryStore::<u64, u64, u64, u64, &'static str>::new();
+        let member_visibility = |visibility: &Visibility<&'static str>| {
+            matches!(
+                visibility,
+                Visibility::Public | Visibility::Restricted("ops")
+            )
+        };
+        let public_visibility =
+            |visibility: &Visibility<&'static str>| matches!(visibility, Visibility::Public);
+
+        let public_address = PresenceAddress::new(7_u64, 9_u64, Some(3_u64));
+        let restricted_address = PresenceAddress::new(8_u64, 9_u64, Some(4_u64));
+
+        store.publish(
+            PresenceUpdate::new(
+                public_address,
+                11_u64,
+                Visibility::Public,
+                Timestamp::new(20),
+                Expiry::At(Timestamp::new(40)),
+            )
+            .set_availability(Availability::Available),
+        );
+        store.publish(
+            PresenceUpdate::new(
+                restricted_address,
+                12_u64,
+                Visibility::Restricted("ops"),
+                Timestamp::new(21),
+                Expiry::At(Timestamp::new(22)),
+            )
+            .set_activity(Activity::Editing),
+        );
+
+        let mut public_watcher = WatcherCursor::new();
+        let public_first_poll = public_watcher.poll_visible(&store, &public_visibility);
+        assert_eq!(public_first_poll.len(), 1);
+        assert_eq!(public_watcher.sequence(), 1);
+        assert!(!public_watcher.has_pending_visible(&store, &public_visibility));
+
+        store.expire(Timestamp::new(22));
+
+        let public_second_poll = public_watcher.poll_visible(&store, &public_visibility);
+        assert!(public_second_poll.is_empty());
+        assert_eq!(public_watcher.sequence(), 1);
+
+        let mut member_watcher = WatcherCursor::new();
+        let member_first_poll = member_watcher.poll_visible(&store, &member_visibility);
+        assert_eq!(member_first_poll.len(), 3);
+        assert_eq!(member_watcher.sequence(), 3);
+        assert!(!member_watcher.has_pending_visible(&store, &member_visibility));
     }
 }
