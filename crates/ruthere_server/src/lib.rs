@@ -8,6 +8,10 @@
 //! `ruthere_server` receives presence updates, manages expiry against an
 //! internal store, and provides watcher polling helpers. It intentionally does
 //! not own transport, authentication, or push delivery.
+//!
+//! The crate also exposes narrow `PresenceIngress` and `PresenceWatch`
+//! contracts for runtimes that want the current server seam without depending
+//! on the concrete `PresenceServer` type directly.
 
 extern crate alloc;
 
@@ -16,6 +20,8 @@ use alloc::vec::Vec;
 use ruthere_core::{ExtensionFacet, Never, PresenceKey, PresenceUpdate, Timestamp};
 use ruthere_store::InMemoryStore;
 pub use ruthere_store::{StoreChange, StoreChangeKind, VisibilityPolicy, WatcherCursor};
+mod traits;
+pub use traits::{PresenceIngress, PresenceWatch};
 
 /// A small process-local server over an internal in-memory store.
 #[derive(Clone, Debug)]
@@ -163,18 +169,107 @@ where
     }
 }
 
+impl<S, C, R, I, V, E> PresenceIngress<S, C, R, I, V, E> for PresenceServer<S, C, R, I, V, E>
+where
+    S: PresenceKey,
+    C: PresenceKey,
+    R: PresenceKey,
+    I: PresenceKey,
+    V: Clone,
+    E: ExtensionFacet,
+{
+    fn receive(&mut self, update: PresenceUpdate<S, C, R, I, V, E>) -> u64 {
+        Self::receive(self, update)
+    }
+
+    fn last_sequence(&self) -> u64 {
+        Self::last_sequence(self)
+    }
+
+    fn expire(&mut self, now: Timestamp) -> usize {
+        Self::expire(self, now)
+    }
+}
+
+impl<S, C, R, I, V, E> PresenceWatch<S, C, R, I, V, E> for PresenceServer<S, C, R, I, V, E>
+where
+    S: PresenceKey,
+    C: PresenceKey,
+    R: PresenceKey,
+    I: PresenceKey,
+    V: Clone,
+    E: ExtensionFacet,
+{
+    fn watcher_cursor(&self) -> WatcherCursor {
+        Self::watcher_cursor(self)
+    }
+
+    fn watcher_cursor_from_current(&self) -> WatcherCursor {
+        Self::watcher_cursor_from_current(self)
+    }
+
+    fn has_pending(&self, cursor: WatcherCursor) -> bool {
+        Self::has_pending(self, cursor)
+    }
+
+    fn has_pending_visible<P>(&self, cursor: WatcherCursor, visibility: &P) -> bool
+    where
+        P: VisibilityPolicy<V>,
+    {
+        Self::has_pending_visible(self, cursor, visibility)
+    }
+
+    fn poll(&self, cursor: &mut WatcherCursor) -> Vec<StoreChange<S, C, R, I, V, E>> {
+        Self::poll(self, cursor)
+    }
+
+    fn poll_visible<P>(
+        &self,
+        cursor: &mut WatcherCursor,
+        visibility: &P,
+    ) -> Vec<StoreChange<S, C, R, I, V, E>>
+    where
+        P: VisibilityPolicy<V>,
+    {
+        Self::poll_visible(self, cursor, visibility)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::PresenceServer;
+    use super::{PresenceIngress, PresenceServer, PresenceWatch};
     use ruthere_core::{
         Activity, Availability, Expiry, PresenceAddress, PresenceUpdate, Timestamp, Visibility,
     };
+
+    fn receive_through_ingress<S>(
+        server: &mut S,
+        update: PresenceUpdate<u64, u64, u64, u64, &'static str>,
+    ) -> u64
+    where
+        S: PresenceIngress<u64, u64, u64, u64, &'static str>,
+    {
+        server.receive(update)
+    }
+
+    fn poll_visible_through_watch<S, P>(
+        server: &S,
+        cursor: &mut super::WatcherCursor,
+        visibility: &P,
+    ) -> alloc::vec::Vec<super::StoreChange<u64, u64, u64, u64, &'static str>>
+    where
+        S: PresenceWatch<u64, u64, u64, u64, &'static str>,
+        P: super::VisibilityPolicy<&'static str>,
+    {
+        server.poll_visible(cursor, visibility)
+    }
 
     #[test]
     fn server_receives_updates_and_expires_entries() {
         let mut server = PresenceServer::<u64, u64, u64, u64, &'static str>::new();
 
-        let sequence = server.receive(
+        let sequence = receive_through_ingress(
+            &mut server,
             PresenceUpdate::new(
                 PresenceAddress::new(7, 9, Some(3)),
                 11,
@@ -208,7 +303,8 @@ mod tests {
         let public_only =
             |visibility: &Visibility<&'static str>| matches!(visibility, Visibility::Public);
 
-        server.receive(
+        receive_through_ingress(
+            &mut server,
             PresenceUpdate::new(
                 PresenceAddress::new(7, 9, Some(3)),
                 11,
@@ -218,7 +314,8 @@ mod tests {
             )
             .set_activity(Activity::Editing),
         );
-        server.receive(
+        receive_through_ingress(
+            &mut server,
             PresenceUpdate::new(
                 PresenceAddress::new(8, 9, Some(4)),
                 12,
@@ -229,13 +326,28 @@ mod tests {
             .set_availability(Availability::Available),
         );
 
-        let mut member_cursor = server.watcher_cursor();
+        let mut member_cursor =
+            <PresenceServer<u64, u64, u64, u64, &'static str> as PresenceWatch<
+                u64,
+                u64,
+                u64,
+                u64,
+                &'static str,
+            >>::watcher_cursor(&server);
         let mut public_cursor = server.watcher_cursor();
 
-        assert!(server.has_pending_visible(member_cursor, &member_view));
+        assert!(
+            <PresenceServer<u64, u64, u64, u64, &'static str> as PresenceWatch<
+                u64,
+                u64,
+                u64,
+                u64,
+                &'static str,
+            >>::has_pending_visible(&server, member_cursor, &member_view)
+        );
         assert!(server.has_pending_visible(public_cursor, &public_only));
 
-        let member_changes = server.poll_visible(&mut member_cursor, &member_view);
+        let member_changes = poll_visible_through_watch(&server, &mut member_cursor, &member_view);
         let public_changes = server.poll_visible(&mut public_cursor, &public_only);
 
         assert_eq!(member_changes.len(), 2);
