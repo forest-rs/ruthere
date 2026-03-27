@@ -5,7 +5,8 @@
 It demonstrates the intended end-to-end flow with concrete key types:
 
 - create an in-memory store
-- publish presence updates for one subject from multiple resources
+- configure `PresenceBeacon` publishers for one subject across multiple resources
+- publish presence updates from those beacons
 - inspect retained changes with store-assigned cursors
 - inspect a single materialized snapshot
 - materialize all snapshots in a context

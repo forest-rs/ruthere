@@ -10,9 +10,10 @@ use std::{
     ops::BitOr,
 };
 
+use ruthere_beacon::{ExpiryPolicy, PresenceBeacon};
 use ruthere_core::{
-    Activity, Availability, BuiltinFacet, Expiry, FacetChange, PresenceAddress, PresenceFacet,
-    PresenceUpdate, Timestamp, Visibility,
+    Activity, Availability, BuiltinFacet, FacetChange, PresenceAddress, PresenceFacet, Timestamp,
+    Visibility,
 };
 use ruthere_store::{
     InMemoryStore, StoreChange, StoreChangeKind, SubjectPresenceSummary, VisibilityPolicy,
@@ -69,6 +70,16 @@ fn main() {
         Some(ResourceId("browser-tab")),
     );
 
+    let alice_browser = PresenceBeacon::new(alice_browser, OriginId("session/browser"))
+        .with_visibility(Visibility::Restricted("doc-members"))
+        .with_expiry_policy(ExpiryPolicy::After(70));
+    let alice_mobile = PresenceBeacon::new(alice_mobile, OriginId("session/mobile"))
+        .with_visibility(Visibility::Restricted("doc-members"))
+        .with_expiry_policy(ExpiryPolicy::After(5));
+    let bob_browser = PresenceBeacon::new(bob_browser, OriginId("session/presenter"))
+        .with_visibility(Visibility::Public)
+        .with_expiry_policy(ExpiryPolicy::After(69));
+
     let member_view = |visibility: &Visibility<&'static str>| {
         matches!(
             visibility,
@@ -105,16 +116,10 @@ fn main() {
 
     ui.section("1️⃣", "Restricted Edit Session Starts");
     let sequence = store.publish(
-        PresenceUpdate::new(
-            alice_browser,
-            OriginId("session/browser"),
-            Visibility::Restricted("doc-members"),
-            Timestamp::new(100),
-            Expiry::At(Timestamp::new(170)),
-        )
-        .set_availability(Availability::Available)
-        .set_activity(Activity::Editing)
-        .set_last_seen(Timestamp::new(100)),
+        alice_browser
+            .heartbeat_at(Timestamp::new(100))
+            .set_availability(Availability::Available)
+            .set_activity(Activity::Editing),
     );
     print_publish(
         &ui,
@@ -141,16 +146,10 @@ fn main() {
 
     ui.section("2️⃣", "Public Viewer Appears");
     let sequence = store.publish(
-        PresenceUpdate::new(
-            bob_browser,
-            OriginId("session/presenter"),
-            Visibility::Public,
-            Timestamp::new(111),
-            Expiry::At(Timestamp::new(180)),
-        )
-        .set_availability(Availability::Available)
-        .set_activity(Activity::Observing)
-        .set_last_seen(Timestamp::new(111)),
+        bob_browser
+            .heartbeat_at(Timestamp::new(111))
+            .set_availability(Availability::Available)
+            .set_activity(Activity::Observing),
     );
     print_publish(&ui, sequence, "bob arrives as a public observer", "public");
     poll_viewer(
@@ -172,15 +171,10 @@ fn main() {
 
     ui.section("3️⃣", "Second Resource Joins");
     let sequence = store.publish(
-        PresenceUpdate::new(
-            alice_mobile,
-            OriginId("session/mobile"),
-            Visibility::Restricted("doc-members"),
-            Timestamp::new(115),
-            Expiry::At(Timestamp::new(120)),
-        )
-        .set_availability(Availability::Away)
-        .set_activity(Activity::Observing),
+        alice_mobile
+            .update_at(Timestamp::new(115))
+            .set_availability(Availability::Away)
+            .set_activity(Activity::Observing),
     );
     print_publish(
         &ui,

@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/ruthere_beacon",
     "crates/ruthere_core",
     "crates/ruthere_store",
     "examples/basic_presence_flow",
@@ -68,6 +69,7 @@ clippy.wildcard_dependencies = "warn"
 clippy.allow_attributes = "warn"
 
 [workspace.dependencies]
+ruthere_beacon = { path = "crates/ruthere_beacon" }
 ruthere_core = { path = "crates/ruthere_core" }
 ruthere_store = { path = "crates/ruthere_store" }
 

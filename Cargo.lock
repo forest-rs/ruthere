@@ -6,6 +6,7 @@ version = 4
 name = "basic_presence_flow"
 version = "0.1.0"
 dependencies = [
+ "ruthere_beacon",
  "ruthere_core",
  "ruthere_store",
 ]
@@ -26,6 +27,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ruthere_beacon"
+version = "0.1.0"
+dependencies = [
+ "ruthere_core",
+]
+
+[[package]]
 name = "ruthere_core"
 version = "0.1.0"
 
@@ -41,6 +49,7 @@ dependencies = [
 name = "watcher_presence_flow"
 version = "0.1.0"
 dependencies = [
+ "ruthere_beacon",
  "ruthere_core",
  "ruthere_store",
 ]

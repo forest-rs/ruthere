@@ -10,9 +10,8 @@ use std::{
     ops::BitOr,
 };
 
-use ruthere_core::{
-    Activity, Availability, Expiry, PresenceAddress, PresenceUpdate, Timestamp, Visibility,
-};
+use ruthere_beacon::{ExpiryPolicy, PresenceBeacon};
+use ruthere_core::{Activity, Availability, Expiry, PresenceAddress, Timestamp, Visibility};
 use ruthere_store::{
     InMemoryStore, PresenceEntryKey, StoreChange, StoreChangeKind, SubjectPresenceSummary,
 };
@@ -62,44 +61,31 @@ fn main() {
     let alice_mobile =
         PresenceAddress::new(SubjectId("alice"), doc.clone(), Some(ResourceId("mobile")));
 
-    let browser_origin = OriginId("session/browser");
-    let mobile_origin = OriginId("session/mobile");
+    let alice_browser = PresenceBeacon::new(alice_browser, OriginId("session/browser"))
+        .with_visibility(Visibility::Restricted("doc-members"))
+        .with_expiry_policy(ExpiryPolicy::After(60));
+    let alice_mobile = PresenceBeacon::new(alice_mobile, OriginId("session/mobile"))
+        .with_visibility(Visibility::Restricted("doc-members"))
+        .with_expiry_policy(ExpiryPolicy::After(15));
 
     let first_sequence = store.publish(
-        PresenceUpdate::new(
-            alice_browser.clone(),
-            browser_origin.clone(),
-            Visibility::Restricted("doc-members"),
-            Timestamp::new(100),
-            Expiry::At(Timestamp::new(160)),
-        )
-        .set_availability(Availability::Available)
-        .set_activity(Activity::Observing)
-        .set_last_seen(Timestamp::new(100)),
+        alice_browser
+            .heartbeat_at(Timestamp::new(100))
+            .set_availability(Availability::Available)
+            .set_activity(Activity::Observing),
     );
 
     let second_sequence = store.publish(
-        PresenceUpdate::new(
-            alice_browser.clone(),
-            browser_origin.clone(),
-            Visibility::Restricted("doc-members"),
-            Timestamp::new(110),
-            Expiry::At(Timestamp::new(170)),
-        )
-        .set_activity(Activity::Editing)
-        .set_last_seen(Timestamp::new(110)),
+        alice_browser
+            .heartbeat_at(Timestamp::new(110))
+            .set_activity(Activity::Editing),
     );
 
     let third_sequence = store.publish(
-        PresenceUpdate::new(
-            alice_mobile.clone(),
-            mobile_origin.clone(),
-            Visibility::Restricted("doc-members"),
-            Timestamp::new(105),
-            Expiry::At(Timestamp::new(120)),
-        )
-        .set_availability(Availability::Away)
-        .set_activity(Activity::Observing),
+        alice_mobile
+            .update_at(Timestamp::new(105))
+            .set_availability(Availability::Away)
+            .set_activity(Activity::Observing),
     );
 
     ui.banner("🧭", "Basic Presence Flow");
@@ -142,7 +128,10 @@ fn main() {
         "no retained changes visible to public-only viewers",
     );
 
-    let browser_key = PresenceEntryKey::new(alice_browser.clone(), browser_origin.clone());
+    let browser_key = PresenceEntryKey::new(
+        alice_browser.address().clone(),
+        alice_browser.origin().clone(),
+    );
     let browser_snapshot = store
         .snapshot(&browser_key)
         .expect("browser entry should be present after publish");
