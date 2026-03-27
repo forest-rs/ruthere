@@ -1,0 +1,17 @@
+[package]
+name = "ruthere_server"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Process-local server seam for receiving and serving ruthere presence facts"
+keywords = ["presence", "server", "realtime"]
+categories = ["data-structures", "no-std"]
+
+[dependencies]
+ruthere_core.workspace = true
+ruthere_store.workspace = true
+
+[lints]
+workspace = true

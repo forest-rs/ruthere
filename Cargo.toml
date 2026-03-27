@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/ruthere_beacon",
     "crates/ruthere_core",
+    "crates/ruthere_server",
     "crates/ruthere_store",
     "examples/basic_presence_flow",
     "examples/watcher_presence_flow",
@@ -71,6 +72,7 @@ clippy.allow_attributes = "warn"
 [workspace.dependencies]
 ruthere_beacon = { path = "crates/ruthere_beacon" }
 ruthere_core = { path = "crates/ruthere_core" }
+ruthere_server = { path = "crates/ruthere_server" }
 ruthere_store = { path = "crates/ruthere_store" }
 
 hashbrown = { default-features = false, features = ["default-hasher"], version = "0.16.1" }

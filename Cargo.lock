@@ -38,6 +38,14 @@ name = "ruthere_core"
 version = "0.1.0"
 
 [[package]]
+name = "ruthere_server"
+version = "0.1.0"
+dependencies = [
+ "ruthere_core",
+ "ruthere_store",
+]
+
+[[package]]
 name = "ruthere_store"
 version = "0.1.0"
 dependencies = [
@@ -51,5 +59,6 @@ version = "0.1.0"
 dependencies = [
  "ruthere_beacon",
  "ruthere_core",
+ "ruthere_server",
  "ruthere_store",
 ]

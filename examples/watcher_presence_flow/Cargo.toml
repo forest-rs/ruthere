@@ -13,6 +13,7 @@ publish = false
 [dependencies]
 ruthere_beacon.workspace = true
 ruthere_core.workspace = true
+ruthere_server.workspace = true
 ruthere_store.workspace = true
 
 [lints]

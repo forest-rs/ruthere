@@ -5,9 +5,9 @@
 
 It demonstrates one narrow loop with concrete key types:
 
-- create an in-memory store
+- create a small process-local `PresenceServer`
 - configure `PresenceBeacon` publishers with different visibility labels
-- publish presence updates from those beacons
+- publish presence updates into the server from those beacons
 - track `WatcherCursor` state for multiple viewers
 - poll `has_pending_visible` / `poll_visible`
 - refresh subject summaries only when a viewer sees something new

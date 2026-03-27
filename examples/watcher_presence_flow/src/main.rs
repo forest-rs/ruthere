@@ -15,10 +15,10 @@ use ruthere_core::{
     Activity, Availability, BuiltinFacet, FacetChange, PresenceAddress, PresenceFacet, Timestamp,
     Visibility,
 };
-use ruthere_store::{
-    InMemoryStore, StoreChange, StoreChangeKind, SubjectPresenceSummary, VisibilityPolicy,
-    WatcherCursor,
+use ruthere_server::{
+    PresenceServer, StoreChange, StoreChangeKind, VisibilityPolicy, WatcherCursor,
 };
+use ruthere_store::SubjectPresenceSummary;
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 struct SubjectId(&'static str);
@@ -32,7 +32,7 @@ struct ResourceId(&'static str);
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 struct OriginId(&'static str);
 
-type Store = InMemoryStore<SubjectId, ContextId, ResourceId, OriginId, &'static str>;
+type Server = PresenceServer<SubjectId, ContextId, ResourceId, OriginId, &'static str>;
 type Summary = SubjectPresenceSummary<
     SubjectId,
     ContextId,
@@ -54,7 +54,7 @@ const COLOR_YELLOW: u8 = 33;
 
 fn main() {
     let ui = Ui::detect();
-    let mut store = Store::new();
+    let mut server = Server::new();
 
     let doc = ContextId("doc-42");
     let alice_browser = PresenceAddress::new(
@@ -94,12 +94,13 @@ fn main() {
 
     ui.banner("👀", "Watcher Presence Flow");
     ui.kv("context", doc.0);
+    ui.kv("server", "process-local in-memory server");
     ui.kv("watchers", "doc-members, public-only");
 
     ui.section("🔎", "Initial Poll");
     poll_viewer(
         &ui,
-        &store,
+        &server,
         &doc,
         "doc-members watcher",
         &mut member_cursor,
@@ -107,7 +108,7 @@ fn main() {
     );
     poll_viewer(
         &ui,
-        &store,
+        &server,
         &doc,
         "public-only watcher",
         &mut public_cursor,
@@ -115,7 +116,7 @@ fn main() {
     );
 
     ui.section("1️⃣", "Restricted Edit Session Starts");
-    let sequence = store.publish(
+    let sequence = server.receive(
         alice_browser
             .heartbeat_at(Timestamp::new(100))
             .set_availability(Availability::Available)
@@ -129,7 +130,7 @@ fn main() {
     );
     poll_viewer(
         &ui,
-        &store,
+        &server,
         &doc,
         "doc-members watcher",
         &mut member_cursor,
@@ -137,7 +138,7 @@ fn main() {
     );
     poll_viewer(
         &ui,
-        &store,
+        &server,
         &doc,
         "public-only watcher",
         &mut public_cursor,
@@ -145,7 +146,7 @@ fn main() {
     );
 
     ui.section("2️⃣", "Public Viewer Appears");
-    let sequence = store.publish(
+    let sequence = server.receive(
         bob_browser
             .heartbeat_at(Timestamp::new(111))
             .set_availability(Availability::Available)
@@ -154,7 +155,7 @@ fn main() {
     print_publish(&ui, sequence, "bob arrives as a public observer", "public");
     poll_viewer(
         &ui,
-        &store,
+        &server,
         &doc,
         "doc-members watcher",
         &mut member_cursor,
@@ -162,7 +163,7 @@ fn main() {
     );
     poll_viewer(
         &ui,
-        &store,
+        &server,
         &doc,
         "public-only watcher",
         &mut public_cursor,
@@ -170,7 +171,7 @@ fn main() {
     );
 
     ui.section("3️⃣", "Second Resource Joins");
-    let sequence = store.publish(
+    let sequence = server.receive(
         alice_mobile
             .update_at(Timestamp::new(115))
             .set_availability(Availability::Away)
@@ -184,7 +185,7 @@ fn main() {
     );
     poll_viewer(
         &ui,
-        &store,
+        &server,
         &doc,
         "doc-members watcher",
         &mut member_cursor,
@@ -192,7 +193,7 @@ fn main() {
     );
     poll_viewer(
         &ui,
-        &store,
+        &server,
         &doc,
         "public-only watcher",
         &mut public_cursor,
@@ -202,7 +203,7 @@ fn main() {
     ui.section("😴", "Idle Poll");
     poll_viewer(
         &ui,
-        &store,
+        &server,
         &doc,
         "doc-members watcher",
         &mut member_cursor,
@@ -210,7 +211,7 @@ fn main() {
     );
     poll_viewer(
         &ui,
-        &store,
+        &server,
         &doc,
         "public-only watcher",
         &mut public_cursor,
@@ -218,11 +219,11 @@ fn main() {
     );
 
     ui.section("⏳", "Expiry At t=125");
-    let removed = store.expire(Timestamp::new(125));
+    let removed = server.expire(Timestamp::new(125));
     ui.kv("removed entries", &removed.to_string());
     poll_viewer(
         &ui,
-        &store,
+        &server,
         &doc,
         "doc-members watcher",
         &mut member_cursor,
@@ -230,7 +231,7 @@ fn main() {
     );
     poll_viewer(
         &ui,
-        &store,
+        &server,
         &doc,
         "public-only watcher",
         &mut public_cursor,
@@ -240,7 +241,7 @@ fn main() {
 
 fn poll_viewer<P>(
     ui: &Ui,
-    store: &Store,
+    server: &Server,
     context: &ContextId,
     watcher: &str,
     cursor: &mut WatcherCursor,
@@ -253,14 +254,14 @@ fn poll_viewer<P>(
     ui.item(watcher);
     ui.detail("cursor before", &format!("#{before}"));
 
-    if !cursor.has_pending_visible(store, visibility) {
+    if !server.has_pending_visible(*cursor, visibility) {
         ui.detail("changes", &ui.muted_value("none"));
         ui.detail("cursor after", &format!("#{before}"));
         ui.detail("summary refresh", &ui.muted_value("skipped"));
         return;
     }
 
-    let changes = cursor.poll_visible(store, visibility);
+    let changes = server.poll_visible(cursor, visibility);
     let after = cursor.sequence();
 
     ui.detail("changes", &changes.len().to_string());
@@ -271,7 +272,9 @@ fn poll_viewer<P>(
         print_change(ui, change);
     }
 
-    let mut summaries = store.subject_summaries_in_context_visible(context, visibility);
+    let mut summaries = server
+        .store()
+        .subject_summaries_in_context_visible(context, visibility);
     summaries.sort_by(summary_sort_key);
 
     ui.detail("visible subjects", &summaries.len().to_string());
