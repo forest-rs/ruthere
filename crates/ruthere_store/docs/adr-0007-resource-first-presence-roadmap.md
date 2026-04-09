@@ -43,8 +43,8 @@ The workspace boundary is:
 - Preserve calm internal semantics while leaving runtime mechanics replaceable.
 - Keep one subject's multiple resources visible in the data model.
 - Preserve visibility and expiry as first-class concerns.
-- Leave room for versioned materialized views, richer freshness semantics, and
-  future subscription layers.
+- Leave room for future runtime layers without forcing speculative APIs into the
+  current store surface.
 
 ## Non-Goals
 
@@ -84,20 +84,20 @@ state itself.
    projection.
 3. Store-global sequence numbers are not treated as per-entry or per-summary
    revision numbers.
-4. Availability and freshness are related but different concepts.
-5. Visibility remains part of the presence model even when policy evaluation is
+4. Visibility remains part of the presence model even when policy evaluation is
    supplied by outer layers.
-6. Extension facets remain typed Rust values rather than stringly typed bags.
+5. Extension facets remain typed Rust values rather than stringly typed bags.
 
 ## Consequences
 
-Near-term runtime evolution should concentrate on store and projection seams:
+Near-term runtime evolution should concentrate on the seams that are already
+structurally required:
 
-- add explicit per-entry and per-summary revision semantics for materialized
-  views
-- expose richer summary provenance when a dominant resource is selected
-- introduce projected freshness semantics separate from `Availability`
-- consider retained-change gap or resync signaling for future watcher layers
+- preserve per-resource, per-origin truth as the canonical stored state
+- keep subject summaries derived and inspectable rather than magical
+- make retained-change gaps explicit when compaction prevents exact replay
+- defer revisioned views, richer provenance, and freshness helpers until
+  concrete consumers justify the added surface area
 
 If interchange is needed later, it should be isolated in a dedicated outer
 crate such as `ruthere_wire`, `ruthere_pidf`, or `ruthere_watch`. Those crates

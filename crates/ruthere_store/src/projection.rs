@@ -152,7 +152,6 @@ where
         .iter()
         .max_by(|left, right| compare_snapshot_dominance(policy, left, right))
         .expect("subject projection requires at least one snapshot");
-
     let observed_at = accumulator
         .resources
         .iter()

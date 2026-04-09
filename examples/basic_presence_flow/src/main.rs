@@ -13,7 +13,8 @@ use std::{
 use ruthere_beacon::{ExpiryPolicy, PresenceBeacon};
 use ruthere_core::{Activity, Availability, Expiry, PresenceAddress, Timestamp, Visibility};
 use ruthere_store::{
-    InMemoryStore, PresenceEntryKey, StoreChange, StoreChangeKind, SubjectPresenceSummary,
+    InMemoryStore, PresenceEntryKey, RetainedChanges, RetainedGap, StoreChange, StoreChangeKind,
+    SubjectPresenceSummary,
 };
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -29,6 +30,7 @@ struct ResourceId(&'static str);
 struct OriginId(&'static str);
 
 type Store = InMemoryStore<SubjectId, ContextId, ResourceId, OriginId, &'static str>;
+type ChangeBatch = RetainedChanges<SubjectId, ContextId, ResourceId, OriginId, &'static str>;
 type Snapshot =
     ruthere_core::PresenceSnapshot<SubjectId, ContextId, ResourceId, OriginId, &'static str>;
 type Summary = SubjectPresenceSummary<
@@ -99,9 +101,7 @@ fn main() {
     );
 
     ui.section("📡", "Retained Changes Since #0");
-    for change in store.changes_since(0) {
-        print_change(&ui, &change);
-    }
+    print_change_query(&ui, store.changes_since(0), "no retained changes");
 
     let member_view = |visibility: &Visibility<&'static str>| {
         matches!(
@@ -111,20 +111,19 @@ fn main() {
     };
     let public_only =
         |visibility: &Visibility<&'static str>| matches!(visibility, Visibility::Public);
-
     ui.section("🔐", "Visibility-Filtered Changes Since #0");
     ui.detail("viewer", "doc-members");
     let member_changes = store.changes_since_visible(0, &member_view);
-    print_changes_or_empty(
+    print_change_query_or_empty(
         &ui,
-        &member_changes,
+        member_changes,
         "no retained changes visible to doc members",
     );
     ui.detail("viewer", "public-only");
     let public_changes = store.changes_since_visible(0, &public_only);
-    print_changes_or_empty(
+    print_change_query_or_empty(
         &ui,
-        &public_changes,
+        public_changes,
         "no retained changes visible to public-only viewers",
     );
 
@@ -135,7 +134,6 @@ fn main() {
     let browser_snapshot = store
         .snapshot(&browser_key)
         .expect("browser entry should be present after publish");
-
     ui.section("🧾", "Single Snapshot Lookup");
     print_snapshot(&ui, &browser_snapshot);
 
@@ -194,23 +192,21 @@ fn main() {
     ui.kv("removed entries", &removed.to_string());
 
     ui.section("📡", "Retained Changes Since #3");
-    for change in store.changes_since(3) {
-        print_change(&ui, &change);
-    }
+    print_change_query(&ui, store.changes_since(3), "no retained changes");
 
     ui.section("🔐", "Visibility-Filtered Changes Since #3");
     ui.detail("viewer", "doc-members");
     let member_changes = store.changes_since_visible(3, &member_view);
-    print_changes_or_empty(
+    print_change_query_or_empty(
         &ui,
-        &member_changes,
+        member_changes,
         "no retained changes visible to doc members",
     );
     ui.detail("viewer", "public-only");
     let public_changes = store.changes_since_visible(3, &public_only);
-    print_changes_or_empty(
+    print_change_query_or_empty(
         &ui,
-        &public_changes,
+        public_changes,
         "no retained changes visible to public-only viewers",
     );
 
@@ -227,6 +223,24 @@ fn main() {
     for summary in &summaries {
         print_summary(&ui, summary);
     }
+
+    let compacted = store.compact_changes_through(3);
+    ui.section("🧹", "Retained Log Compacted Through #3");
+    ui.kv("removed retained changes", &compacted.to_string());
+    ui.kv(
+        "retained floor",
+        &format!("#{}", store.retained_floor_sequence()),
+    );
+
+    ui.section("⚠️", "Query Since #0 After Compaction");
+    print_change_query(&ui, store.changes_since(0), "no retained changes");
+
+    ui.section("✅", "Query From Retained Floor");
+    print_change_query(
+        &ui,
+        store.changes_since(store.retained_floor_sequence()),
+        "no retained changes above retained floor",
+    );
 }
 
 fn snapshot_sort_key(left: &Snapshot, right: &Snapshot) -> core::cmp::Ordering {
@@ -304,7 +318,7 @@ fn print_summary(ui: &Ui, summary: &Summary) {
     ui.detail("dominant origin", dominant_origin);
     ui.detail("last seen", &last_seen);
     ui.detail("observed at", &observed_at.to_string());
-    ui.detail("resource count", &resource_count.to_string());
+    ui.detail("raw snapshots", &resource_count.to_string());
 }
 
 fn print_summaries_or_empty(ui: &Ui, summaries: &[Summary], empty: &str) {
@@ -316,6 +330,17 @@ fn print_summaries_or_empty(ui: &Ui, summaries: &[Summary], empty: &str) {
     for summary in summaries {
         print_summary(ui, summary);
     }
+}
+
+fn print_change_query(ui: &Ui, changes: ChangeBatch, empty: &str) {
+    match changes {
+        Ok(changes) => print_changes_or_empty(ui, &changes, empty),
+        Err(gap) => print_retained_gap(ui, gap),
+    }
+}
+
+fn print_change_query_or_empty(ui: &Ui, changes: ChangeBatch, empty: &str) {
+    print_change_query(ui, changes, empty);
 }
 
 fn print_changes_or_empty(
@@ -331,6 +356,16 @@ fn print_changes_or_empty(
     for change in changes {
         print_change(ui, change);
     }
+}
+
+fn print_retained_gap(ui: &Ui, gap: RetainedGap) {
+    ui.item("retained log gap");
+    ui.detail("requested since", &format!("#{}", gap.requested_since));
+    ui.detail(
+        "retained floor",
+        &format!("#{}", gap.retained_floor_sequence),
+    );
+    ui.detail("store tail", &format!("#{}", gap.last_sequence));
 }
 
 fn print_change(

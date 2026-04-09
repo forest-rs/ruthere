@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 
 use ruthere_core::{ExtensionFacet, Never, PresenceUpdate, Timestamp};
 
-use crate::{StoreChange, VisibilityPolicy, WatcherCursor};
+use crate::{RetainedChanges, RetainedStatus, VisibilityPolicy, WatcherCursor};
 
 /// Write-side ingest and lifecycle contract for a presence server.
 ///
@@ -46,31 +46,32 @@ pub trait PresenceWatch<S, C, R, I, V, E = Never>
 where
     E: ExtensionFacet,
 {
-    /// Returns a watcher cursor that starts at the beginning of the retained
-    /// change log.
+    /// Returns a watcher cursor that starts at the current retained-log floor.
     fn watcher_cursor(&self) -> WatcherCursor;
 
     /// Returns a watcher cursor positioned at the current sequence tail.
     fn watcher_cursor_from_current(&self) -> WatcherCursor;
 
-    /// Returns `true` when the server has retained changes beyond the cursor.
-    fn has_pending(&self, cursor: WatcherCursor) -> bool;
+    /// Returns the retained-log status for one watcher cursor.
+    fn pending_status(&self, cursor: WatcherCursor) -> RetainedStatus;
 
-    /// Returns `true` when the server has retained visible changes beyond the
+    /// Returns the retained-log status for visible changes at one watcher
     /// cursor.
-    fn has_pending_visible<P>(&self, cursor: WatcherCursor, visibility: &P) -> bool
+    fn pending_status_visible<P>(&self, cursor: WatcherCursor, visibility: &P) -> RetainedStatus
     where
         P: VisibilityPolicy<V>;
 
-    /// Drains retained changes beyond the cursor and advances it.
-    fn poll(&self, cursor: &mut WatcherCursor) -> Vec<StoreChange<S, C, R, I, V, E>>;
+    /// Drains retained changes beyond the cursor and advances it, or returns a
+    /// retained-gap error.
+    fn poll(&self, cursor: &mut WatcherCursor) -> RetainedChanges<S, C, R, I, V, E>;
 
-    /// Drains retained visible changes beyond the cursor and advances it.
+    /// Drains retained visible changes beyond the cursor and advances it, or
+    /// returns a retained-gap error.
     fn poll_visible<P>(
         &self,
         cursor: &mut WatcherCursor,
         visibility: &P,
-    ) -> Vec<StoreChange<S, C, R, I, V, E>>
+    ) -> RetainedChanges<S, C, R, I, V, E>
     where
         P: VisibilityPolicy<V>;
 }

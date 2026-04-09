@@ -1,11 +1,9 @@
 // Copyright 2026 the ruthere Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use alloc::vec::Vec;
-
 use ruthere_core::{ExtensionFacet, PresenceKey};
 
-use crate::{InMemoryStore, StoreChange, VisibilityPolicy};
+use crate::{InMemoryStore, RetainedChanges, RetainedStatus, VisibilityPolicy};
 
 /// A local watcher cursor over retained store changes.
 ///
@@ -35,9 +33,14 @@ impl WatcherCursor {
         self.sequence
     }
 
-    /// Returns `true` when the store has retained changes beyond the cursor.
+    /// Resets the cursor to an explicit sequence position.
+    pub fn reset_to(&mut self, sequence: u64) {
+        self.sequence = sequence;
+    }
+
+    /// Returns the retained-log status for this cursor.
     #[must_use]
-    pub fn has_pending<S, C, R, I, V, E>(self, store: &InMemoryStore<S, C, R, I, V, E>) -> bool
+    pub fn status<S, C, R, I, V, E>(self, store: &InMemoryStore<S, C, R, I, V, E>) -> RetainedStatus
     where
         S: PresenceKey,
         C: PresenceKey,
@@ -46,17 +49,16 @@ impl WatcherCursor {
         V: Clone,
         E: ExtensionFacet,
     {
-        store.has_changes_since(self.sequence)
+        store.change_status_since(self.sequence)
     }
 
-    /// Returns `true` when the store has retained visible changes beyond the
-    /// cursor.
+    /// Returns the retained-log status for visible changes at this cursor.
     #[must_use]
-    pub fn has_pending_visible<S, C, R, I, V, E, P>(
+    pub fn status_visible<S, C, R, I, V, E, P>(
         self,
         store: &InMemoryStore<S, C, R, I, V, E>,
         visibility: &P,
-    ) -> bool
+    ) -> RetainedStatus
     where
         S: PresenceKey,
         C: PresenceKey,
@@ -66,16 +68,16 @@ impl WatcherCursor {
         E: ExtensionFacet,
         P: VisibilityPolicy<V>,
     {
-        store.has_visible_changes_since(self.sequence, visibility)
+        store.visible_change_status_since(self.sequence, visibility)
     }
 
     /// Drains retained changes beyond the cursor and advances to the newest
-    /// returned sequence.
-    #[must_use]
+    /// returned sequence, or returns a retained-gap error without advancing the
+    /// cursor.
     pub fn poll<S, C, R, I, V, E>(
         &mut self,
         store: &InMemoryStore<S, C, R, I, V, E>,
-    ) -> Vec<StoreChange<S, C, R, I, V, E>>
+    ) -> RetainedChanges<S, C, R, I, V, E>
     where
         S: PresenceKey,
         C: PresenceKey,
@@ -84,21 +86,21 @@ impl WatcherCursor {
         V: Clone,
         E: ExtensionFacet,
     {
-        let changes = store.changes_since(self.sequence);
+        let changes = store.changes_since(self.sequence)?;
         if let Some(last) = changes.last() {
             self.sequence = last.sequence;
         }
-        changes
+        Ok(changes)
     }
 
     /// Drains retained visible changes beyond the cursor and advances to the
-    /// newest visible sequence.
-    #[must_use]
+    /// newest visible sequence, or returns a retained-gap error without
+    /// advancing the cursor.
     pub fn poll_visible<S, C, R, I, V, E, P>(
         &mut self,
         store: &InMemoryStore<S, C, R, I, V, E>,
         visibility: &P,
-    ) -> Vec<StoreChange<S, C, R, I, V, E>>
+    ) -> RetainedChanges<S, C, R, I, V, E>
     where
         S: PresenceKey,
         C: PresenceKey,
@@ -108,11 +110,11 @@ impl WatcherCursor {
         E: ExtensionFacet,
         P: VisibilityPolicy<V>,
     {
-        let changes = store.changes_since_visible(self.sequence, visibility);
+        let changes = store.changes_since_visible(self.sequence, visibility)?;
         if let Some(last) = changes.last() {
             self.sequence = last.sequence;
         }
-        changes
+        Ok(changes)
     }
 }
 

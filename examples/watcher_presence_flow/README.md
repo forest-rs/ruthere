@@ -9,8 +9,9 @@ It demonstrates one narrow loop with concrete key types:
 - configure `PresenceBeacon` publishers with different visibility labels
 - publish presence updates into the server from those beacons
 - track `WatcherCursor` state for multiple viewers
-- poll `has_pending_visible` / `poll_visible`
-- refresh subject summaries only when a viewer sees something new
+- poll `pending_status_visible` / `poll_visible`
+- refresh visible subject summaries only when a viewer sees something new
+- compact retained changes and rebuild state after a stale watcher hits a gap
 - react to expiry without introducing transport or async machinery
 
 Run it with:

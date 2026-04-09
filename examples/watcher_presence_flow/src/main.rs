@@ -18,7 +18,7 @@ use ruthere_core::{
 use ruthere_server::{
     PresenceServer, StoreChange, StoreChangeKind, VisibilityPolicy, WatcherCursor,
 };
-use ruthere_store::SubjectPresenceSummary;
+use ruthere_store::{RetainedGap, RetainedStatus};
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 struct SubjectId(&'static str);
@@ -33,7 +33,7 @@ struct ResourceId(&'static str);
 struct OriginId(&'static str);
 
 type Server = PresenceServer<SubjectId, ContextId, ResourceId, OriginId, &'static str>;
-type Summary = SubjectPresenceSummary<
+type SummaryView = ruthere_store::SubjectPresenceSummary<
     SubjectId,
     ContextId,
     ResourceId,
@@ -89,8 +89,8 @@ fn main() {
     let public_only =
         |visibility: &Visibility<&'static str>| matches!(visibility, Visibility::Public);
 
-    let mut member_cursor = WatcherCursor::new();
-    let mut public_cursor = WatcherCursor::new();
+    let mut member_cursor = server.watcher_cursor();
+    let mut public_cursor = server.watcher_cursor();
 
     ui.banner("👀", "Watcher Presence Flow");
     ui.kv("context", doc.0);
@@ -237,6 +237,47 @@ fn main() {
         &mut public_cursor,
         &public_only,
     );
+
+    ui.section("🧹", "Compaction And Resync");
+    let compacted = server.compact_changes_through(3);
+    ui.kv("removed retained changes", &compacted.to_string());
+    ui.kv(
+        "retained floor",
+        &format!("#{}", server.retained_floor_sequence()),
+    );
+
+    let mut stale_cursor = WatcherCursor::new();
+    ui.item("late doc-members watcher");
+    ui.detail("cursor before", &format!("#{}", stale_cursor.sequence()));
+    match server.poll_visible(&mut stale_cursor, &member_view) {
+        Ok(changes) => {
+            ui.detail("changes", &changes.len().to_string());
+            ui.detail("cursor after", &format!("#{}", stale_cursor.sequence()));
+        }
+        Err(gap) => {
+            ui.detail("changes", &ui.warning_value("gap"));
+            print_retained_gap(&ui, gap);
+            let baseline = server
+                .store()
+                .subject_summaries_in_context_visible(&doc, &member_view);
+            ui.detail("baseline subjects", &baseline.len().to_string());
+
+            stale_cursor.reset_to(gap.last_sequence);
+            ui.detail(
+                "cursor after rebuild",
+                &format!("#{}", stale_cursor.sequence()),
+            );
+
+            let changes = server
+                .poll_visible(&mut stale_cursor, &member_view)
+                .expect("cursor should be queryable after baseline rebuild");
+            ui.detail("changes after rebuild", &changes.len().to_string());
+            ui.detail("cursor after", &format!("#{}", stale_cursor.sequence()));
+            for change in &changes {
+                print_change(&ui, change);
+            }
+        }
+    }
 }
 
 fn poll_viewer<P>(
@@ -254,14 +295,29 @@ fn poll_viewer<P>(
     ui.item(watcher);
     ui.detail("cursor before", &format!("#{before}"));
 
-    if !server.has_pending_visible(*cursor, visibility) {
-        ui.detail("changes", &ui.muted_value("none"));
-        ui.detail("cursor after", &format!("#{before}"));
-        ui.detail("summary refresh", &ui.muted_value("skipped"));
-        return;
+    match server.pending_status_visible(*cursor, visibility) {
+        RetainedStatus::UpToDate => {
+            ui.detail("changes", &ui.muted_value("none"));
+            ui.detail("cursor after", &format!("#{before}"));
+            ui.detail("summary refresh", &ui.muted_value("skipped"));
+            return;
+        }
+        RetainedStatus::Gap(gap) => {
+            ui.detail("changes", &ui.warning_value("gap"));
+            ui.detail("cursor after", &format!("#{before}"));
+            ui.detail(
+                "summary refresh",
+                &ui.warning_value("baseline rebuild required"),
+            );
+            print_retained_gap(ui, gap);
+            return;
+        }
+        RetainedStatus::Pending => {}
     }
 
-    let changes = server.poll_visible(cursor, visibility);
+    let changes = server
+        .poll_visible(cursor, visibility)
+        .expect("pending status should make visible poll queryable");
     let after = cursor.sequence();
 
     ui.detail("changes", &changes.len().to_string());
@@ -281,6 +337,16 @@ fn poll_viewer<P>(
     for summary in &summaries {
         print_summary(ui, summary);
     }
+}
+
+fn print_retained_gap(ui: &Ui, gap: RetainedGap) {
+    ui.subitem("retained log gap");
+    ui.subdetail("requested since", &format!("#{}", gap.requested_since));
+    ui.subdetail(
+        "retained floor",
+        &format!("#{}", gap.retained_floor_sequence),
+    );
+    ui.subdetail("store tail", &format!("#{}", gap.last_sequence));
 }
 
 fn print_publish(ui: &Ui, sequence: u64, title: &str, visibility: &'static str) {
@@ -328,7 +394,7 @@ fn print_change(ui: &Ui, change: &Change) {
     }
 }
 
-fn print_summary(ui: &Ui, summary: &Summary) {
+fn print_summary(ui: &Ui, summary: &SummaryView) {
     let resource = summary
         .dominant_resource
         .as_ref()
@@ -346,10 +412,11 @@ fn print_summary(ui: &Ui, summary: &Summary) {
     ui.subdetail("dominant resource", resource);
     ui.subdetail("dominant origin", summary.dominant_origin.0);
     ui.subdetail("last seen", &last_seen);
-    ui.subdetail("resource count", &summary.resources.len().to_string());
+    ui.subdetail("observed at", &summary.observed_at.get().to_string());
+    ui.subdetail("raw snapshots", &summary.resources.len().to_string());
 }
 
-fn summary_sort_key(left: &Summary, right: &Summary) -> core::cmp::Ordering {
+fn summary_sort_key(left: &SummaryView, right: &SummaryView) -> core::cmp::Ordering {
     left.subject.cmp(&right.subject)
 }
 
@@ -563,6 +630,10 @@ impl Ui {
 
     fn success_value(&self, value: &str) -> String {
         self.paint(value, COLOR_GREEN, StyleFlags::BOLD)
+    }
+
+    fn warning_value(&self, value: &str) -> String {
+        self.paint(value, COLOR_YELLOW, StyleFlags::BOLD)
     }
 
     fn paint(&self, value: &str, color: u8, flags: StyleFlags) -> String {

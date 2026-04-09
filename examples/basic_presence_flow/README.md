@@ -11,6 +11,7 @@ It demonstrates the intended end-to-end flow with concrete key types:
 - inspect a single materialized snapshot
 - materialize all snapshots in a context
 - project subject-level summaries over resource snapshots
+- compact retained changes and observe explicit gap metadata on stale queries
 - expire stale entries
 
 Run it with:

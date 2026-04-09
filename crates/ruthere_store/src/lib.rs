@@ -18,6 +18,7 @@ use hashbrown::{HashMap, hash_map::Entry};
 mod change;
 mod cursor;
 mod projection;
+mod retained;
 mod visibility;
 
 pub use change::{StoreChange, StoreChangeKind, StoreExpired};
@@ -26,6 +27,7 @@ pub use projection::{
     DefaultSubjectProjectionPolicy, SubjectPresenceSummary, SubjectProjectionPolicy,
 };
 use projection::{group_snapshots_by_subject, summarize_subject};
+pub use retained::{RetainedGap, RetainedResult, RetainedStatus};
 use ruthere_core::{
     Expiry, ExtensionFacet, FacetChange, Never, PresenceAddress, PresenceFacet, PresenceFacetKind,
     PresenceKey, PresenceSnapshot, PresenceUpdate, Timestamp, Visibility,
@@ -52,6 +54,10 @@ impl<S, C, R, I> PresenceEntryKey<S, C, R, I> {
     }
 }
 
+/// A retained-log change query over one store.
+pub type RetainedChanges<S, C, R, I, V, E = Never> =
+    RetainedResult<Vec<StoreChange<S, C, R, I, V, E>>>;
+
 #[derive(Clone, Debug)]
 struct SnapshotState<V, E>
 where
@@ -77,18 +83,42 @@ where
         }
     }
 
-    fn apply_changes(&mut self, changes: Vec<FacetChange<E>>) {
+    fn apply_update(
+        &mut self,
+        visibility: Visibility<V>,
+        observed_at: Timestamp,
+        expiry: Expiry,
+        changes: Vec<FacetChange<E>>,
+    ) -> bool {
+        let mut changed = visibility_may_have_changed(&self.visibility, &visibility);
+        changed |= self.observed_at != observed_at;
+        changed |= self.expiry != expiry;
+
+        self.visibility = visibility;
+        self.observed_at = observed_at;
+        self.expiry = expiry;
+        changed |= self.apply_changes(changes);
+
+        changed
+    }
+
+    fn apply_changes(&mut self, changes: Vec<FacetChange<E>>) -> bool {
+        let mut changed = false;
+
         for change in changes {
             match change {
                 FacetChange::Set(facet) => {
                     let kind = facet.kind();
+                    changed |= facet_set_may_have_changed(&self.facets, &kind, &facet);
                     self.facets.insert(kind, facet);
                 }
                 FacetChange::Clear(kind) => {
-                    self.facets.remove(&kind);
+                    changed |= self.facets.remove(&kind).is_some();
                 }
             }
         }
+
+        changed
     }
 }
 
@@ -104,6 +134,7 @@ where
     E: ExtensionFacet,
 {
     next_sequence: u64,
+    retained_floor_sequence: u64,
     changes: Vec<StoreChange<S, C, R, I, V, E>>,
     entries: HashMap<PresenceEntryKey<S, C, R, I>, SnapshotState<V, E>>,
 }
@@ -120,6 +151,7 @@ where
     fn default() -> Self {
         Self {
             next_sequence: 0,
+            retained_floor_sequence: 0,
             changes: Vec::new(),
             entries: HashMap::new(),
         }
@@ -159,55 +191,88 @@ where
         self.next_sequence
     }
 
-    /// Returns `true` when the store has retained changes with a sequence
-    /// greater than `sequence`.
+    /// Returns the oldest cursor position that can still be queried exactly
+    /// against the retained change log.
     #[must_use]
-    pub fn has_changes_since(&self, sequence: u64) -> bool {
-        self.last_sequence() > sequence
+    pub const fn retained_floor_sequence(&self) -> u64 {
+        self.retained_floor_sequence
     }
 
-    /// Returns all retained store changes with `sequence > since`.
-    ///
-    /// Change order matches store sequence order.
-    #[must_use]
-    pub fn changes_since(&self, since: u64) -> Vec<StoreChange<S, C, R, I, V, E>> {
-        self.changes
+    /// Compacts retained changes with `sequence <= through` and returns how
+    /// many retained changes were removed.
+    pub fn compact_changes_through(&mut self, through: u64) -> usize {
+        let compacted_through = through.min(self.last_sequence());
+        if compacted_through <= self.retained_floor_sequence {
+            return 0;
+        }
+
+        let removed = self
+            .changes
             .iter()
-            .filter(|change| change.sequence > since)
-            .cloned()
-            .collect()
+            .take_while(|change| change.sequence <= compacted_through)
+            .count();
+        self.changes.drain(0..removed);
+        self.retained_floor_sequence = compacted_through;
+
+        removed
     }
 
-    /// Returns `true` when the store has retained visible changes with a
-    /// sequence greater than `sequence`.
+    /// Returns the retained-log status for `changes_since(sequence)`.
     #[must_use]
-    pub fn has_visible_changes_since<P>(&self, sequence: u64, visibility: &P) -> bool
+    pub fn change_status_since(&self, sequence: u64) -> RetainedStatus {
+        self.retained_status_for(sequence, self.last_sequence() > sequence)
+    }
+
+    /// Returns the retained-log status for visible `changes_since(sequence)`.
+    #[must_use]
+    pub fn visible_change_status_since<P>(&self, sequence: u64, visibility: &P) -> RetainedStatus
     where
         P: VisibilityPolicy<V>,
     {
-        self.changes
+        self.retained_status_for(
+            sequence,
+            self.changes
+                .iter()
+                .any(|change| change.sequence > sequence && change_is_visible(change, visibility)),
+        )
+    }
+
+    /// Returns all retained store changes with `sequence > since`, or a
+    /// retained-gap error when the requested range has been compacted away.
+    ///
+    /// Change order matches store sequence order.
+    pub fn changes_since(&self, since: u64) -> RetainedChanges<S, C, R, I, V, E> {
+        self.ensure_retained_since(since)?;
+
+        Ok(self
+            .changes
             .iter()
-            .any(|change| change.sequence > sequence && change_is_visible(change, visibility))
+            .filter(|change| change.sequence > since)
+            .cloned()
+            .collect())
     }
 
     /// Returns all retained store changes with `sequence > since` that satisfy
-    /// the supplied visibility policy.
+    /// the supplied visibility policy, or a retained-gap error when the
+    /// requested range has been compacted away.
     ///
     /// Change order matches store sequence order.
-    #[must_use]
     pub fn changes_since_visible<P>(
         &self,
         since: u64,
         visibility: &P,
-    ) -> Vec<StoreChange<S, C, R, I, V, E>>
+    ) -> RetainedChanges<S, C, R, I, V, E>
     where
         P: VisibilityPolicy<V>,
     {
-        self.changes
+        self.ensure_retained_since(since)?;
+
+        Ok(self
+            .changes
             .iter()
             .filter(|change| change.sequence > since && change_is_visible(change, visibility))
             .cloned()
-            .collect()
+            .collect())
     }
 
     /// Publishes an update into the store and returns the assigned sequence.
@@ -231,17 +296,18 @@ where
         } = update;
 
         let key = PresenceEntryKey::new(address, origin);
-        let state = match self.entries.entry(key) {
-            Entry::Occupied(entry) => entry.into_mut(),
-            Entry::Vacant(entry) => {
-                entry.insert(SnapshotState::new(visibility.clone(), observed_at, expiry))
+        match self.entries.entry(key) {
+            Entry::Occupied(entry) => {
+                entry
+                    .into_mut()
+                    .apply_update(visibility, observed_at, expiry, changes);
             }
-        };
-
-        state.visibility = visibility;
-        state.observed_at = observed_at;
-        state.expiry = expiry;
-        state.apply_changes(changes);
+            Entry::Vacant(entry) => {
+                let mut state = SnapshotState::new(visibility, observed_at, expiry);
+                state.apply_changes(changes);
+                entry.insert(state);
+            }
+        }
 
         sequence
     }
@@ -559,6 +625,56 @@ where
             facets: state.facets.values().cloned().collect(),
         }
     }
+
+    fn ensure_retained_since(&self, since: u64) -> RetainedResult<()> {
+        if since < self.retained_floor_sequence {
+            Err(RetainedGap::new(
+                since,
+                self.retained_floor_sequence,
+                self.last_sequence(),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn retained_status_for(&self, sequence: u64, has_pending: bool) -> RetainedStatus {
+        if sequence < self.retained_floor_sequence {
+            RetainedStatus::Gap(RetainedGap::new(
+                sequence,
+                self.retained_floor_sequence,
+                self.last_sequence(),
+            ))
+        } else if has_pending {
+            RetainedStatus::Pending
+        } else {
+            RetainedStatus::UpToDate
+        }
+    }
+}
+
+fn visibility_may_have_changed<V>(current: &Visibility<V>, next: &Visibility<V>) -> bool {
+    !matches!(
+        (current, next),
+        (Visibility::Public, Visibility::Public) | (Visibility::Private, Visibility::Private)
+    )
+}
+
+fn facet_set_may_have_changed<K, E>(
+    facets: &HashMap<PresenceFacetKind<K>, PresenceFacet<E>>,
+    kind: &PresenceFacetKind<K>,
+    facet: &PresenceFacet<E>,
+) -> bool
+where
+    K: Eq + core::hash::Hash,
+    E: ExtensionFacet,
+{
+    match facet {
+        PresenceFacet::Builtin(new_builtin) => {
+            !matches!(facets.get(kind), Some(PresenceFacet::Builtin(existing)) if *existing == *new_builtin)
+        }
+        PresenceFacet::Extension(..) => true,
+    }
 }
 
 fn change_is_visible<S, C, R, I, V, E, P>(
@@ -579,7 +695,10 @@ where
 mod tests {
     use alloc::vec::Vec;
 
-    use super::{InMemoryStore, PresenceEntryKey, StoreChangeKind, StoreExpired, WatcherCursor};
+    use super::{
+        InMemoryStore, PresenceEntryKey, RetainedStatus, StoreChangeKind, StoreExpired,
+        WatcherCursor,
+    };
     use ruthere_core::{
         Activity, Availability, Expiry, ExtensionFacet, PresenceAddress, PresenceFacet,
         PresenceUpdate, Timestamp, Visibility,
@@ -637,7 +756,7 @@ mod tests {
         );
 
         let snapshot = store
-            .snapshot(&PresenceEntryKey::new(address, 11_u64))
+            .snapshot(&PresenceEntryKey::new(address.clone(), 11_u64))
             .expect("missing stored snapshot");
 
         assert_eq!(snapshot.availability(), Some(Availability::Available));
@@ -645,6 +764,11 @@ mod tests {
         assert_eq!(snapshot.last_seen(), None);
         assert_eq!(snapshot.observed_at, Timestamp::new(21));
         assert_eq!(snapshot.expiry, Expiry::At(Timestamp::new(55)));
+
+        let snapshot = store
+            .snapshot(&PresenceEntryKey::new(address, 11_u64))
+            .expect("missing stored snapshot");
+        assert_eq!(snapshot.address.resource, Some(3_u64));
     }
 
     #[test]
@@ -872,7 +996,7 @@ mod tests {
             .set_activity(Activity::Editing),
         );
 
-        let changes = store.changes_since(0);
+        let changes = store.changes_since(0).expect("changes should be queryable");
 
         assert_eq!(changes.len(), 2);
         assert_eq!(changes[0].sequence, 1);
@@ -881,8 +1005,14 @@ mod tests {
             changes[0].kind,
             StoreChangeKind::Published(PresenceUpdate { .. })
         ));
-        assert!(store.has_changes_since(1));
-        assert!(!store.has_changes_since(2));
+        assert!(matches!(
+            store.change_status_since(1),
+            RetainedStatus::Pending
+        ));
+        assert!(matches!(
+            store.change_status_since(2),
+            RetainedStatus::UpToDate
+        ));
     }
 
     #[test]
@@ -912,7 +1042,7 @@ mod tests {
         );
 
         let removed = store.expire(Timestamp::new(5));
-        let changes = store.changes_since(2);
+        let changes = store.changes_since(2).expect("changes should be queryable");
 
         assert_eq!(removed, 1);
         assert_eq!(changes.len(), 1);
@@ -922,7 +1052,7 @@ mod tests {
             StoreChangeKind::Expired(StoreExpired {
                 key: PresenceEntryKey { address, origin },
                 visibility: Visibility::Public,
-            }) if *address == expired_key && *origin == 100_u64
+            }) if address == &expired_key && *origin == 100_u64
         ));
     }
 
@@ -1046,18 +1176,32 @@ mod tests {
             .set_activity(Activity::Observing),
         );
 
-        let member_changes = store.changes_since_visible(0, &member_view);
-        let public_changes = store.changes_since_visible(0, &public_only);
+        let member_changes = store
+            .changes_since_visible(0, &member_view)
+            .expect("member changes should be queryable");
+        let public_changes = store
+            .changes_since_visible(0, &public_only)
+            .expect("public changes should be queryable");
 
         assert_eq!(member_changes.len(), 2);
         assert_eq!(public_changes.len(), 1);
         assert_eq!(public_changes[0].sequence, 2);
-        assert!(store.has_visible_changes_since(0, &member_view));
-        assert!(store.has_visible_changes_since(0, &public_only));
+        assert!(matches!(
+            store.visible_change_status_since(0, &member_view),
+            RetainedStatus::Pending
+        ));
+        assert!(matches!(
+            store.visible_change_status_since(0, &public_only),
+            RetainedStatus::Pending
+        ));
 
         let removed = store.expire(Timestamp::new(5));
-        let member_expiry = store.changes_since_visible(2, &member_view);
-        let public_expiry = store.changes_since_visible(2, &public_only);
+        let member_expiry = store
+            .changes_since_visible(2, &member_view)
+            .expect("member expiry should be queryable");
+        let public_expiry = store
+            .changes_since_visible(2, &public_only)
+            .expect("public expiry should be queryable");
 
         assert_eq!(removed, 1);
         assert_eq!(member_expiry.len(), 1);
@@ -1069,8 +1213,14 @@ mod tests {
                 ..
             })
         ));
-        assert!(store.has_visible_changes_since(2, &member_view));
-        assert!(!store.has_visible_changes_since(2, &public_only));
+        assert!(matches!(
+            store.visible_change_status_since(2, &member_view),
+            RetainedStatus::Pending
+        ));
+        assert!(matches!(
+            store.visible_change_status_since(2, &public_only),
+            RetainedStatus::UpToDate
+        ));
     }
 
     #[test]
@@ -1100,14 +1250,14 @@ mod tests {
         );
 
         let mut watcher = WatcherCursor::new();
-        assert!(watcher.has_pending(&store));
+        assert!(matches!(watcher.status(&store), RetainedStatus::Pending));
 
-        let first_poll = watcher.poll(&store);
+        let first_poll = watcher.poll(&store).expect("changes should be queryable");
         assert_eq!(first_poll.len(), 2);
         assert_eq!(watcher.sequence(), 2);
-        assert!(!watcher.has_pending(&store));
+        assert!(matches!(watcher.status(&store), RetainedStatus::UpToDate));
 
-        let second_poll = watcher.poll(&store);
+        let second_poll = watcher.poll(&store).expect("changes should be queryable");
         assert!(second_poll.is_empty());
         assert_eq!(watcher.sequence(), 2);
     }
@@ -1149,21 +1299,79 @@ mod tests {
         );
 
         let mut public_watcher = WatcherCursor::new();
-        let public_first_poll = public_watcher.poll_visible(&store, &public_visibility);
+        let public_first_poll = public_watcher
+            .poll_visible(&store, &public_visibility)
+            .expect("visible changes should be queryable");
         assert_eq!(public_first_poll.len(), 1);
         assert_eq!(public_watcher.sequence(), 1);
-        assert!(!public_watcher.has_pending_visible(&store, &public_visibility));
+        assert!(matches!(
+            public_watcher.status_visible(&store, &public_visibility),
+            RetainedStatus::UpToDate
+        ));
 
         store.expire(Timestamp::new(22));
 
-        let public_second_poll = public_watcher.poll_visible(&store, &public_visibility);
+        let public_second_poll = public_watcher
+            .poll_visible(&store, &public_visibility)
+            .expect("visible changes should be queryable");
         assert!(public_second_poll.is_empty());
         assert_eq!(public_watcher.sequence(), 1);
 
         let mut member_watcher = WatcherCursor::new();
-        let member_first_poll = member_watcher.poll_visible(&store, &member_visibility);
+        let member_first_poll = member_watcher
+            .poll_visible(&store, &member_visibility)
+            .expect("visible changes should be queryable");
         assert_eq!(member_first_poll.len(), 3);
         assert_eq!(member_watcher.sequence(), 3);
-        assert!(!member_watcher.has_pending_visible(&store, &member_visibility));
+        assert!(matches!(
+            member_watcher.status_visible(&store, &member_visibility),
+            RetainedStatus::UpToDate
+        ));
+    }
+
+    #[test]
+    fn compaction_surfaces_gap_and_requires_baseline_rebuild() {
+        let mut store = InMemoryStore::<u64, u64, u64, u64, ()>::new();
+
+        for observed_at in 1_u64..=3 {
+            store.publish(
+                PresenceUpdate::new(
+                    PresenceAddress::new(1_u64, 9_u64, Some(10_u64)),
+                    100_u64,
+                    Visibility::Public,
+                    Timestamp::new(observed_at),
+                    Expiry::Never,
+                )
+                .set_activity(Activity::Observing),
+            );
+        }
+
+        let removed = store.compact_changes_through(2);
+        assert_eq!(removed, 2);
+        assert_eq!(store.retained_floor_sequence(), 2);
+        assert!(matches!(
+            store.change_status_since(1),
+            RetainedStatus::Gap(_)
+        ));
+
+        let mut watcher = WatcherCursor::from_sequence(1);
+        let gap = watcher
+            .poll(&store)
+            .expect_err("compaction should surface a gap");
+        assert_eq!(watcher.sequence(), 1);
+        assert_eq!(gap.retained_floor_sequence, 2);
+        assert_eq!(gap.last_sequence, 3);
+
+        let baseline = store
+            .subject_summary_in_context(&1_u64, &9_u64)
+            .expect("baseline summary should still be available");
+        assert_eq!(baseline.resources.len(), 1);
+
+        watcher.reset_to(gap.last_sequence);
+        let changes = watcher
+            .poll(&store)
+            .expect("cursor should be queryable after baseline rebuild");
+        assert!(changes.is_empty());
+        assert_eq!(watcher.sequence(), 3);
     }
 }

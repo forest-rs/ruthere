@@ -19,7 +19,10 @@ use alloc::vec::Vec;
 
 use ruthere_core::{ExtensionFacet, Never, PresenceKey, PresenceUpdate, Timestamp};
 use ruthere_store::InMemoryStore;
-pub use ruthere_store::{StoreChange, StoreChangeKind, VisibilityPolicy, WatcherCursor};
+pub use ruthere_store::{
+    RetainedChanges, RetainedGap, RetainedResult, RetainedStatus, StoreChange, StoreChangeKind,
+    VisibilityPolicy, WatcherCursor,
+};
 mod traits;
 pub use traits::{PresenceIngress, PresenceWatch};
 
@@ -86,6 +89,13 @@ where
         self.store.last_sequence()
     }
 
+    /// Returns the oldest cursor position that can still be queried exactly
+    /// against the retained change log.
+    #[must_use]
+    pub const fn retained_floor_sequence(&self) -> u64 {
+        self.store.retained_floor_sequence()
+    }
+
     /// Returns a read-only view of the underlying store.
     #[must_use]
     pub const fn store(&self) -> &InMemoryStore<S, C, R, I, V, E> {
@@ -120,11 +130,16 @@ where
         self.store.expire(now)
     }
 
-    /// Returns a watcher cursor that starts at the beginning of the retained
-    /// change log.
+    /// Compacts retained changes with `sequence <= through` and returns how
+    /// many retained changes were removed.
+    pub fn compact_changes_through(&mut self, through: u64) -> usize {
+        self.store.compact_changes_through(through)
+    }
+
+    /// Returns a watcher cursor that starts at the current retained-log floor.
     #[must_use]
     pub const fn watcher_cursor(&self) -> WatcherCursor {
-        WatcherCursor::new()
+        WatcherCursor::from_sequence(self.retained_floor_sequence())
     }
 
     /// Returns a watcher cursor positioned at the current sequence tail.
@@ -133,35 +148,35 @@ where
         WatcherCursor::from_sequence(self.last_sequence())
     }
 
-    /// Returns `true` when the server has retained changes beyond the cursor.
+    /// Returns the retained-log status for one watcher cursor.
     #[must_use]
-    pub fn has_pending(&self, cursor: WatcherCursor) -> bool {
-        cursor.has_pending(&self.store)
+    pub fn pending_status(&self, cursor: WatcherCursor) -> RetainedStatus {
+        cursor.status(&self.store)
     }
 
-    /// Returns `true` when the server has retained visible changes beyond the
+    /// Returns the retained-log status for visible changes at one watcher
     /// cursor.
     #[must_use]
-    pub fn has_pending_visible<P>(&self, cursor: WatcherCursor, visibility: &P) -> bool
+    pub fn pending_status_visible<P>(&self, cursor: WatcherCursor, visibility: &P) -> RetainedStatus
     where
         P: VisibilityPolicy<V>,
     {
-        cursor.has_pending_visible(&self.store, visibility)
+        cursor.status_visible(&self.store, visibility)
     }
 
-    /// Drains retained changes beyond the cursor and advances it.
-    #[must_use]
-    pub fn poll(&self, cursor: &mut WatcherCursor) -> Vec<StoreChange<S, C, R, I, V, E>> {
+    /// Drains retained changes beyond the cursor and advances it, or returns a
+    /// retained-gap error.
+    pub fn poll(&self, cursor: &mut WatcherCursor) -> RetainedChanges<S, C, R, I, V, E> {
         cursor.poll(&self.store)
     }
 
-    /// Drains retained visible changes beyond the cursor and advances it.
-    #[must_use]
+    /// Drains retained visible changes beyond the cursor and advances it, or
+    /// returns a retained-gap error.
     pub fn poll_visible<P>(
         &self,
         cursor: &mut WatcherCursor,
         visibility: &P,
-    ) -> Vec<StoreChange<S, C, R, I, V, E>>
+    ) -> RetainedChanges<S, C, R, I, V, E>
     where
         P: VisibilityPolicy<V>,
     {
@@ -208,18 +223,18 @@ where
         Self::watcher_cursor_from_current(self)
     }
 
-    fn has_pending(&self, cursor: WatcherCursor) -> bool {
-        Self::has_pending(self, cursor)
+    fn pending_status(&self, cursor: WatcherCursor) -> RetainedStatus {
+        Self::pending_status(self, cursor)
     }
 
-    fn has_pending_visible<P>(&self, cursor: WatcherCursor, visibility: &P) -> bool
+    fn pending_status_visible<P>(&self, cursor: WatcherCursor, visibility: &P) -> RetainedStatus
     where
         P: VisibilityPolicy<V>,
     {
-        Self::has_pending_visible(self, cursor, visibility)
+        Self::pending_status_visible(self, cursor, visibility)
     }
 
-    fn poll(&self, cursor: &mut WatcherCursor) -> Vec<StoreChange<S, C, R, I, V, E>> {
+    fn poll(&self, cursor: &mut WatcherCursor) -> RetainedChanges<S, C, R, I, V, E> {
         Self::poll(self, cursor)
     }
 
@@ -227,7 +242,7 @@ where
         &self,
         cursor: &mut WatcherCursor,
         visibility: &P,
-    ) -> Vec<StoreChange<S, C, R, I, V, E>>
+    ) -> RetainedChanges<S, C, R, I, V, E>
     where
         P: VisibilityPolicy<V>,
     {
@@ -237,7 +252,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{PresenceIngress, PresenceServer, PresenceWatch};
+    use super::{PresenceIngress, PresenceServer, PresenceWatch, RetainedStatus};
     use ruthere_core::{
         Activity, Availability, Expiry, PresenceAddress, PresenceUpdate, Timestamp, Visibility,
     };
@@ -256,7 +271,7 @@ mod tests {
         server: &S,
         cursor: &mut super::WatcherCursor,
         visibility: &P,
-    ) -> alloc::vec::Vec<super::StoreChange<u64, u64, u64, u64, &'static str>>
+    ) -> super::RetainedChanges<u64, u64, u64, u64, &'static str>
     where
         S: PresenceWatch<u64, u64, u64, u64, &'static str>,
         P: super::VisibilityPolicy<&'static str>,
@@ -336,26 +351,39 @@ mod tests {
             >>::watcher_cursor(&server);
         let mut public_cursor = server.watcher_cursor();
 
-        assert!(
+        assert!(matches!(
             <PresenceServer<u64, u64, u64, u64, &'static str> as PresenceWatch<
                 u64,
                 u64,
                 u64,
                 u64,
                 &'static str,
-            >>::has_pending_visible(&server, member_cursor, &member_view)
-        );
-        assert!(server.has_pending_visible(public_cursor, &public_only));
+            >>::pending_status_visible(&server, member_cursor, &member_view),
+            RetainedStatus::Pending
+        ));
+        assert!(matches!(
+            server.pending_status_visible(public_cursor, &public_only),
+            RetainedStatus::Pending
+        ));
 
-        let member_changes = poll_visible_through_watch(&server, &mut member_cursor, &member_view);
-        let public_changes = server.poll_visible(&mut public_cursor, &public_only);
+        let member_changes = poll_visible_through_watch(&server, &mut member_cursor, &member_view)
+            .expect("visible changes should be queryable");
+        let public_changes = server
+            .poll_visible(&mut public_cursor, &public_only)
+            .expect("visible changes should be queryable");
 
         assert_eq!(member_changes.len(), 2);
         assert_eq!(public_changes.len(), 1);
         assert_eq!(member_cursor.sequence(), 2);
         assert_eq!(public_cursor.sequence(), 2);
-        assert!(!server.has_pending_visible(member_cursor, &member_view));
-        assert!(!server.has_pending_visible(public_cursor, &public_only));
+        assert!(matches!(
+            server.pending_status_visible(member_cursor, &member_view),
+            RetainedStatus::UpToDate
+        ));
+        assert!(matches!(
+            server.pending_status_visible(public_cursor, &public_only),
+            RetainedStatus::UpToDate
+        ));
     }
 
     #[test]
@@ -374,9 +402,83 @@ mod tests {
         );
 
         let mut cursor = server.watcher_cursor_from_current();
-        let changes = server.poll(&mut cursor);
+        let changes = server
+            .poll(&mut cursor)
+            .expect("tail cursor should be queryable");
 
         assert!(changes.is_empty());
         assert_eq!(cursor.sequence(), 1);
+    }
+
+    #[test]
+    fn watcher_cursor_starts_at_retained_floor() {
+        let mut server = PresenceServer::<u64, u64, u64, u64, ()>::new();
+
+        for observed_at in 1_u64..=3 {
+            server.receive(
+                PresenceUpdate::new(
+                    PresenceAddress::new(7, 9, Some(3)),
+                    11,
+                    Visibility::Public,
+                    Timestamp::new(observed_at),
+                    Expiry::Never,
+                )
+                .set_activity(Activity::Observing),
+            );
+        }
+
+        server.compact_changes_through(2);
+
+        let mut cursor = server.watcher_cursor();
+        let changes = server
+            .poll(&mut cursor)
+            .expect("floor cursor should be queryable");
+
+        assert_eq!(cursor.sequence(), 3);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].sequence, 3);
+    }
+
+    #[test]
+    fn server_surfaces_gap_after_compaction() {
+        let mut server = PresenceServer::<u64, u64, u64, u64, ()>::new();
+
+        for observed_at in 1_u64..=3 {
+            server.receive(
+                PresenceUpdate::new(
+                    PresenceAddress::new(7, 9, Some(3)),
+                    11,
+                    Visibility::Public,
+                    Timestamp::new(observed_at),
+                    Expiry::Never,
+                )
+                .set_activity(Activity::Observing),
+            );
+        }
+
+        let removed = server.store.compact_changes_through(2);
+        assert_eq!(removed, 2);
+
+        let mut cursor = super::WatcherCursor::from_sequence(1);
+        assert!(matches!(
+            server.pending_status(cursor),
+            RetainedStatus::Gap(_)
+        ));
+
+        let gap = server
+            .poll(&mut cursor)
+            .expect_err("compaction should surface a gap");
+        let baseline = server
+            .store()
+            .subject_summary_in_context(&7, &9)
+            .expect("baseline summary should still be available");
+        assert_eq!(baseline.resources.len(), 1);
+
+        cursor.reset_to(gap.last_sequence);
+        let changes = server
+            .poll(&mut cursor)
+            .expect("cursor should be queryable after baseline rebuild");
+
+        assert!(changes.is_empty());
     }
 }

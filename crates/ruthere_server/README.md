@@ -13,7 +13,7 @@ projection queries.
 It also exposes two narrow contracts for future runtimes:
 
 - `PresenceIngress` for receiving updates and applying expiry
-- `PresenceWatch` for watcher cursor creation and retained-change polling
+- `PresenceWatch` for watcher cursor creation and gap-aware retained-change polling
 
 The richer store-backed read model intentionally remains on the concrete
 `PresenceServer`.
