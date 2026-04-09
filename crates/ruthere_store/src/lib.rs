@@ -8,7 +8,8 @@
 //! `ruthere_store` owns sequencing, reduction, and expiry for a local store.
 //! It also provides local watcher cursors over the retained change log without
 //! taking ownership of push delivery, watcher identity, or transport
-//! integration.
+//! integration. Per-resource, per-origin snapshots remain the canonical stored
+//! truth; subject summaries are derived projections over those snapshots.
 
 extern crate alloc;
 

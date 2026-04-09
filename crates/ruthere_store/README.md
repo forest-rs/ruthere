@@ -19,5 +19,14 @@ Filtered read APIs let callers apply their own visibility policy to snapshots
 and subject summaries without moving that policy into `ruthere_core`.
 Filtered cursor APIs now apply that same visibility policy to retained changes.
 
+The store treats per-resource, per-origin snapshots as the canonical truth.
+`SubjectPresenceSummary` is a derived projection over those snapshots rather
+than a replacement for them.
+
+Future store work is expected around explicit materialized-view revision,
+freshness distinct from availability, and eventual gap or resync semantics for
+retained changes. See
+[ADR-0007](docs/adr-0007-resource-first-presence-roadmap.md).
+
 The crate does not yet define watcher identity, push subscriptions, watcher
 policy evaluation, or transport integration.

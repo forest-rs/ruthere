@@ -8,6 +8,9 @@
 //! `ruthere_core` owns the vocabulary for publishing presence updates and for
 //! materializing current presence state. It intentionally does not own watcher
 //! identity, store sequencing, subscription delivery, or visibility evaluation.
+//! `PresenceAddress` scopes truth by subject, context, and optional resource,
+//! while `origin` remains a separate publisher axis on updates and snapshots.
+//! Any interchange or transport model belongs in an outer crate.
 
 extern crate alloc;
 
