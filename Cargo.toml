@@ -5,6 +5,7 @@ members = [
     "crates/ruthere_core",
     "crates/ruthere_server",
     "crates/ruthere_store",
+    "examples/associated_resource_flow",
     "examples/basic_presence_flow",
     "examples/watcher_presence_flow",
 ]

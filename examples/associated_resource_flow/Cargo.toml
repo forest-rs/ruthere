@@ -1,0 +1,18 @@
+[package]
+name = "associated_resource_flow"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Executable example that demonstrates direct and associated resources in ruthere"
+keywords = ["presence", "example", "resource"]
+categories = ["command-line-utilities"]
+publish = false
+
+[dependencies]
+ruthere_core.workspace = true
+ruthere_store.workspace = true
+
+[lints]
+workspace = true

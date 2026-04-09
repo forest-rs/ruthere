@@ -57,8 +57,11 @@ The workspace boundary is:
 
 - `subject`: the presentity-like entity whose presence is being described.
 - `context`: the scope in which that presence is meaningful.
-- `resource`: an optional device, session, or sub-identity within one subject.
-- `origin`: the publisher that asserted the facts; this is distinct from
+- `resource`: an optional contributor to the subject's presence in one context.
+  It may be a direct device, an associated object, a shared thing, or another
+  relevant resource.
+- `origin`: the publisher or observer that asserted the facts; this is distinct
+  from
   `resource`.
 - `summary`: a projected subject-level view derived from underlying resource
   snapshots.
@@ -67,9 +70,10 @@ The workspace boundary is:
 
 One user in one workspace may have both a browser session and a mobile session.
 Those become two distinct addresses with the same `subject` and `context`, but
-different `resource` values. If two publishers also report on the browser
-session, the store still keeps those entries distinct because `origin` is a
-separate axis.
+different `resource` values. In another context, the same subject may also have
+an associated tracker or a shipment whose status is relevant to that subject.
+If two publishers also report on the browser session, the store still keeps
+those entries distinct because `origin` is a separate axis.
 
 Callers may then ask `ruthere_store` for a `SubjectPresenceSummary`. That
 summary can headline the browser as dominant because it is actively editing,
@@ -84,9 +88,11 @@ state itself.
    projection.
 3. Store-global sequence numbers are not treated as per-entry or per-summary
    revision numbers.
-4. Visibility remains part of the presence model even when policy evaluation is
+4. Resource does not imply ownership; ownership or association semantics belong
+   in typed outer vocabularies when needed.
+5. Visibility remains part of the presence model even when policy evaluation is
    supplied by outer layers.
-5. Extension facets remain typed Rust values rather than stringly typed bags.
+6. Extension facets remain typed Rust values rather than stringly typed bags.
 
 ## Consequences
 
@@ -96,6 +102,8 @@ structurally required:
 - preserve per-resource, per-origin truth as the canonical stored state
 - keep subject summaries derived and inspectable rather than magical
 - make retained-change gaps explicit when compaction prevents exact replay
+- broaden examples and docs so `resource` is not implicitly limited to
+  subject-owned devices
 - defer revisioned views, richer provenance, and freshness helpers until
   concrete consumers justify the added surface area
 

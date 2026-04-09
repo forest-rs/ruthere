@@ -12,6 +12,11 @@ snapshots. That separation is deliberate: one subject may have multiple
 resources and multiple concurrent publishers without collapsing into one
 headline status.
 
+`resource` is intentionally broader than "one of my devices." A resource may be
+a direct endpoint, an associated object, a shared tracker, a shipment, or
+another contributor to the subject's presence view in a given context. `origin`
+is provenance for the asserted facts, not an ownership claim.
+
 Any wire format, transport envelope, or subscription runtime belongs in outer
 crates rather than in `ruthere_core`.
 

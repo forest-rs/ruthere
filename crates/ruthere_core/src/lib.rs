@@ -10,7 +10,9 @@
 //! identity, store sequencing, subscription delivery, or visibility evaluation.
 //! `PresenceAddress` scopes truth by subject, context, and optional resource,
 //! while `origin` remains a separate publisher axis on updates and snapshots.
-//! Any interchange or transport model belongs in an outer crate.
+//! A resource may be a direct device, an associated object, a shared tracker, or
+//! another contributor to the subject's presence within one context. Any
+//! interchange or transport model belongs in an outer crate.
 
 extern crate alloc;
 
@@ -264,7 +266,12 @@ pub struct PresenceAddress<S, C, R> {
     pub subject: S,
     /// The context where that presence is meaningful.
     pub context: C,
-    /// The optional resource within the subject that asserted the presence.
+    /// An optional resource whose state contributes to the subject's presence in
+    /// this context.
+    ///
+    /// A resource may be directly owned by the subject, associated with the
+    /// subject, shared, delegated, or externally observed. The core does not
+    /// impose ownership semantics on this axis.
     pub resource: Option<R>,
 }
 
@@ -280,7 +287,7 @@ impl<S, C, R> PresenceAddress<S, C, R> {
     }
 }
 
-/// A published batch of facet changes from a single origin and scope.
+/// A published batch of facet changes from one origin for one addressed scope.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct PresenceUpdate<S, C, R, I, V, E = Never>
 where
@@ -288,7 +295,10 @@ where
 {
     /// The scope of the asserted presence.
     pub address: PresenceAddress<S, C, R>,
-    /// The origin that produced this update.
+    /// The origin that observed or published this update.
+    ///
+    /// The origin is provenance, not ownership: it may be the subject's own
+    /// client, a bridge, a shared system, or another observer.
     pub origin: I,
     /// The visibility label carried by the update.
     pub visibility: Visibility<V>,
@@ -399,7 +409,9 @@ where
 {
     /// The scope of the materialized presence.
     pub address: PresenceAddress<S, C, R>,
-    /// The origin that contributed this snapshot.
+    /// The origin whose published facts materialized into this snapshot.
+    ///
+    /// This remains distinct from both the subject and the optional resource.
     pub origin: I,
     /// The carried visibility label.
     pub visibility: Visibility<V>,
