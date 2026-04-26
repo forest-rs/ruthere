@@ -960,7 +960,7 @@ mod tests {
         );
 
         let mut summaries = store.subject_summaries_in_context(&5_u64);
-        summaries.sort_by(|left, right| left.subject.cmp(&right.subject));
+        summaries.sort_by_key(|summary| summary.subject);
 
         assert_eq!(summaries.len(), 2);
         assert_eq!(summaries[0].subject, 1_u64);
